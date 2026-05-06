@@ -429,6 +429,11 @@
  *	the host driver. The band configurations obtained are referred through
  *	QCA_WLAN_VENDOR_ATTR_SETBAND_MASK.
  *
+ * @QCA_NL80211_VENDOR_SUBCMD_USABLE_CHANNELS: Userspace can query the driver
+ *	for the currently usable channel set after applying regulatory, cellular
+ *	coexistence and WLAN concurrency filtering. The attributes used with this
+ *	command are defined in enum qca_wlan_vendor_attr_usable_channels.
+ *
  */
 
 enum qca_nl80211_vendor_subcmds {
@@ -655,6 +660,7 @@ enum qca_nl80211_vendor_subcmds {
 	QCA_NL80211_VENDOR_SUBCMD_DRIVER_DISCONNECT_REASON = 189,
 	QCA_NL80211_VENDOR_SUBCMD_CONFIG_TWT = 191,
 	QCA_NL80211_VENDOR_SUBCMD_GETBAND = 192,
+	QCA_NL80211_VENDOR_SUBCMD_USABLE_CHANNELS = 198,
 };
 
 enum qca_wlan_vendor_tos {
@@ -5239,6 +5245,63 @@ enum qca_vendor_attr_get_preferred_freq_list {
 	QCA_WLAN_VENDOR_ATTR_GET_PREFERRED_FREQ_LIST_AFTER_LAST,
 	QCA_WLAN_VENDOR_ATTR_GET_PREFERRED_FREQ_LIST_MAX =
 		QCA_WLAN_VENDOR_ATTR_GET_PREFERRED_FREQ_LIST_AFTER_LAST - 1
+};
+
+/**
+ * enum qca_wlan_vendor_usable_channels_filter - usable channel filters
+ * @QCA_WLAN_VENDOR_FILTER_CELLULAR_COEX: filter channels blocked by LTE coex
+ * @QCA_WLAN_VENDOR_FILTER_WLAN_CONCURRENCY: filter channels blocked by active
+ *	WLAN concurrency
+ */
+enum qca_wlan_vendor_usable_channels_filter {
+	QCA_WLAN_VENDOR_FILTER_CELLULAR_COEX = 0,
+	QCA_WLAN_VENDOR_FILTER_WLAN_CONCURRENCY = 1,
+};
+
+/**
+ * enum qca_wlan_vendor_attr_chan_info - per-channel usable channel info
+ * @QCA_WLAN_VENDOR_ATTR_CHAN_INFO_INVALID: invalid attribute
+ * @QCA_WLAN_VENDOR_ATTR_CHAN_INFO_PRIMARY_FREQ: primary channel center freq
+ * @QCA_WLAN_VENDOR_ATTR_CHAN_INFO_SEG0_FREQ: segment 0 center freq
+ * @QCA_WLAN_VENDOR_ATTR_CHAN_INFO_SEG1_FREQ: segment 1 center freq
+ * @QCA_WLAN_VENDOR_ATTR_CHAN_INFO_BANDWIDTH: channel bandwidth
+ * @QCA_WLAN_VENDOR_ATTR_CHAN_INFO_IFACE_MODE_MASK: supported iface mode mask
+ */
+enum qca_wlan_vendor_attr_chan_info {
+	QCA_WLAN_VENDOR_ATTR_CHAN_INFO_INVALID = 0,
+	QCA_WLAN_VENDOR_ATTR_CHAN_INFO_PRIMARY_FREQ = 1,
+	QCA_WLAN_VENDOR_ATTR_CHAN_INFO_SEG0_FREQ = 2,
+	QCA_WLAN_VENDOR_ATTR_CHAN_INFO_SEG1_FREQ = 3,
+	QCA_WLAN_VENDOR_ATTR_CHAN_INFO_BANDWIDTH = 4,
+	QCA_WLAN_VENDOR_ATTR_CHAN_INFO_IFACE_MODE_MASK = 5,
+
+	/* keep last */
+	QCA_WLAN_VENDOR_ATTR_CHAN_INFO_AFTER_LAST,
+	QCA_WLAN_VENDOR_ATTR_CHAN_INFO_MAX =
+		QCA_WLAN_VENDOR_ATTR_CHAN_INFO_AFTER_LAST - 1,
+};
+
+/**
+ * enum qca_wlan_vendor_attr_usable_channels - usable channels request/response
+ * @QCA_WLAN_VENDOR_ATTR_USABLE_CHANNELS_INVALID: invalid attribute
+ * @QCA_WLAN_VENDOR_ATTR_USABLE_CHANNELS_BAND_MASK: requested nl80211 band mask
+ * @QCA_WLAN_VENDOR_ATTR_USABLE_CHANNELS_IFACE_MODE_MASK: requested nl80211
+ *	iface mode mask
+ * @QCA_WLAN_VENDOR_ATTR_USABLE_CHANNELS_FILTER_MASK: requested usable-channel
+ *	filter mask
+ * @QCA_WLAN_VENDOR_ATTR_USABLE_CHANNELS_CHAN_INFO: nested channel info list
+ */
+enum qca_wlan_vendor_attr_usable_channels {
+	QCA_WLAN_VENDOR_ATTR_USABLE_CHANNELS_INVALID = 0,
+	QCA_WLAN_VENDOR_ATTR_USABLE_CHANNELS_BAND_MASK = 1,
+	QCA_WLAN_VENDOR_ATTR_USABLE_CHANNELS_IFACE_MODE_MASK = 2,
+	QCA_WLAN_VENDOR_ATTR_USABLE_CHANNELS_FILTER_MASK = 3,
+	QCA_WLAN_VENDOR_ATTR_USABLE_CHANNELS_CHAN_INFO = 4,
+
+	/* keep last */
+	QCA_WLAN_VENDOR_ATTR_USABLE_CHANNELS_AFTER_LAST,
+	QCA_WLAN_VENDOR_ATTR_USABLE_CHANNELS_MAX =
+		QCA_WLAN_VENDOR_ATTR_USABLE_CHANNELS_AFTER_LAST - 1,
 };
 
 /**
