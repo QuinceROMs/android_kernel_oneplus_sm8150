@@ -802,6 +802,84 @@ enum cc_setting_code {
 };
 
 /**
+ * enum iftype - (virtual) interface types
+ * @IFTYPE_UNSPECIFIED: unspecified type, driver decides
+ * @IFTYPE_ADHOC: independent BSS member
+ * @IFTYPE_STATION: managed BSS member
+ * @IFTYPE_AP: access point
+ * @IFTYPE_AP_VLAN: VLAN interface for access points
+ * @IFTYPE_WDS: wireless distribution interface
+ * @IFTYPE_MONITOR: monitor interface receiving all frames
+ * @IFTYPE_MESH_POINT: mesh point
+ * @IFTYPE_P2P_CLIENT: P2P client
+ * @IFTYPE_P2P_GO: P2P group owner
+ * @IFTYPE_P2P_DEVICE: P2P device interface type
+ * @IFTYPE_OCB: Outside Context of a BSS
+ * @IFTYPE_NAN: NAN mode
+ * @NUM_IFTYPES: number of defined interface types
+ * @IFTYPE_MAX: highest interface type number currently defined
+ */
+enum iftype {
+	IFTYPE_UNSPECIFIED,
+	IFTYPE_ADHOC,
+	IFTYPE_STATION,
+	IFTYPE_AP,
+	IFTYPE_AP_VLAN,
+	IFTYPE_WDS,
+	IFTYPE_MONITOR,
+	IFTYPE_MESH_POINT,
+	IFTYPE_P2P_CLIENT,
+	IFTYPE_P2P_GO,
+	IFTYPE_P2P_DEVICE,
+	IFTYPE_OCB,
+	IFTYPE_NAN,
+
+	/* keep last */
+	NUM_IFTYPES,
+	IFTYPE_MAX = NUM_IFTYPES - 1
+};
+
+/**
+ * enum usable_channels_filter - Filters to get usable channels
+ * @FILTER_CELLULAR_COEX: avoid LTE coexistence channels
+ * @FILTER_WLAN_CONCURRENCY: avoid channels blocked by active concurrency
+ */
+enum usable_channels_filter {
+	FILTER_CELLULAR_COEX = 0,
+	FILTER_WLAN_CONCURRENCY = 1,
+};
+
+/**
+ * struct get_usable_chan_res_params - usable channels response params
+ * @freq: primary center frequency in MHz
+ * @seg0_freq: segment 0 center frequency in MHz
+ * @seg1_freq: segment 1 center frequency in MHz
+ * @bw: channel bandwidth
+ * @iface_mode_mask: interface mode mask for which the channel is usable
+ * @state: regulatory channel state
+ */
+struct get_usable_chan_res_params {
+	qdf_freq_t freq;
+	uint32_t seg0_freq;
+	uint32_t seg1_freq;
+	enum phy_ch_width bw;
+	uint32_t iface_mode_mask;
+	enum channel_state state;
+};
+
+/**
+ * struct get_usable_chan_req_params - usable channels request params
+ * @band_mask: requested band mask
+ * @iface_mode_mask: requested interface mode mask
+ * @filter_mask: requested filter mask
+ */
+struct get_usable_chan_req_params {
+	uint32_t band_mask;
+	uint32_t iface_mode_mask;
+	uint32_t filter_mask;
+};
+
+/**
  * struct cur_reg_rule
  * @start_freq: start frequency
  * @end_freq: end frequency

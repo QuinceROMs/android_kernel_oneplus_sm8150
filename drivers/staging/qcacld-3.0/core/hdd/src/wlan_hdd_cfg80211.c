@@ -15061,6 +15061,335 @@ static int wlan_hdd_cfg80211_extscan_get_valid_channels(
 	return errno;
 }
 
+static const struct nla_policy
+get_usable_channel_policy[QCA_WLAN_VENDOR_ATTR_USABLE_CHANNELS_MAX + 1] = {
+	[QCA_WLAN_VENDOR_ATTR_USABLE_CHANNELS_INVALID] = { .type = NLA_U32 },
+	[QCA_WLAN_VENDOR_ATTR_USABLE_CHANNELS_BAND_MASK] = { .type = NLA_U32 },
+	[QCA_WLAN_VENDOR_ATTR_USABLE_CHANNELS_IFACE_MODE_MASK] = {
+		.type = NLA_U32
+	},
+	[QCA_WLAN_VENDOR_ATTR_USABLE_CHANNELS_FILTER_MASK] = {
+		.type = NLA_U32
+	},
+	[QCA_WLAN_VENDOR_ATTR_USABLE_CHANNELS_CHAN_INFO] = {
+		.type = NLA_NESTED
+	},
+};
+
+static enum nl80211_chan_width
+hdd_convert_phy_bw_to_nl_bw(enum phy_ch_width bw)
+{
+	switch (bw) {
+	case CH_WIDTH_20MHZ:
+		return NL80211_CHAN_WIDTH_20;
+	case CH_WIDTH_40MHZ:
+		return NL80211_CHAN_WIDTH_40;
+	case CH_WIDTH_160MHZ:
+		return NL80211_CHAN_WIDTH_160;
+	case CH_WIDTH_80MHZ:
+		return NL80211_CHAN_WIDTH_80;
+	case CH_WIDTH_80P80MHZ:
+		return NL80211_CHAN_WIDTH_80P80;
+	case CH_WIDTH_5MHZ:
+		return NL80211_CHAN_WIDTH_5;
+	case CH_WIDTH_10MHZ:
+		return NL80211_CHAN_WIDTH_10;
+#ifdef WLAN_FEATURE_11BE
+	case CH_WIDTH_320MHZ:
+		return NL80211_CHAN_WIDTH_320;
+#endif
+	case CH_WIDTH_INVALID:
+	case CH_WIDTH_MAX:
+		return NL80211_CHAN_WIDTH_20;
+	}
+
+	return NL80211_CHAN_WIDTH_20;
+}
+
+static int
+hdd_fill_usable_channels_data(struct sk_buff *skb,
+			      struct get_usable_chan_res_params *res_msg,
+			      uint32_t count)
+{
+	struct nlattr *config;
+	struct nlattr *chan_params;
+	enum nl80211_chan_width bw;
+	uint32_t i;
+	uint32_t index = 1;
+
+	config = nla_nest_start(skb, QCA_WLAN_VENDOR_ATTR_USABLE_CHANNELS_CHAN_INFO);
+	if (!config) {
+		hdd_err("nla nest start failure");
+		return -EINVAL;
+	}
+
+	for (i = 0; i < count; i++) {
+		if (!res_msg[i].freq)
+			continue;
+
+		chan_params = nla_nest_start(skb, index);
+		if (!chan_params)
+			return -EINVAL;
+
+		index++;
+		bw = hdd_convert_phy_bw_to_nl_bw(res_msg[i].bw);
+		hdd_debug("usable chan freq %d bw %d iface mode %d seg0 %d seg1 %d",
+			  res_msg[i].freq, bw, res_msg[i].iface_mode_mask,
+			  res_msg[i].seg0_freq, res_msg[i].seg1_freq);
+
+		if (nla_put_u32(skb, QCA_WLAN_VENDOR_ATTR_CHAN_INFO_PRIMARY_FREQ,
+				res_msg[i].freq) ||
+		    nla_put_u32(skb, QCA_WLAN_VENDOR_ATTR_CHAN_INFO_SEG0_FREQ,
+				res_msg[i].seg0_freq) ||
+		    nla_put_u32(skb, QCA_WLAN_VENDOR_ATTR_CHAN_INFO_SEG1_FREQ,
+				res_msg[i].seg1_freq) ||
+		    nla_put_u32(skb, QCA_WLAN_VENDOR_ATTR_CHAN_INFO_BANDWIDTH,
+				bw) ||
+		    nla_put_u32(skb,
+				QCA_WLAN_VENDOR_ATTR_CHAN_INFO_IFACE_MODE_MASK,
+				res_msg[i].iface_mode_mask)) {
+			hdd_err("nla put failure");
+			return -EINVAL;
+		}
+
+		nla_nest_end(skb, chan_params);
+	}
+
+	nla_nest_end(skb, config);
+	return 0;
+}
+
+static uint32_t hdd_get_usable_channel_len(uint32_t count)
+{
+	uint32_t per_chan_len;
+
+	per_chan_len = nla_total_size(0) +
+		       nla_total_size(sizeof(uint32_t)) +
+		       nla_total_size(sizeof(uint32_t)) +
+		       nla_total_size(sizeof(uint32_t)) +
+		       nla_total_size(sizeof(uint32_t)) +
+		       nla_total_size(sizeof(uint32_t));
+
+	return nla_total_size(0) + (per_chan_len * count);
+}
+
+static int
+hdd_send_usable_channel(struct hdd_context *hdd_ctx,
+			struct get_usable_chan_res_params *res_msg,
+			uint32_t count)
+{
+	struct sk_buff *skb;
+	uint32_t skb_len;
+	int status;
+
+	skb_len = hdd_get_usable_channel_len(count) + NLMSG_HDRLEN;
+	skb = cfg80211_vendor_cmd_alloc_reply_skb(hdd_ctx->wiphy, skb_len);
+	if (!skb) {
+		hdd_info("cfg80211_vendor_cmd_alloc_reply_skb failed");
+		return -ENOMEM;
+	}
+
+	status = hdd_fill_usable_channels_data(skb, res_msg, count);
+	if (status)
+		goto fail;
+
+	return cfg80211_vendor_cmd_reply(skb);
+
+fail:
+	hdd_err("failed to populate usable channels reply");
+	kfree_skb(skb);
+	return status;
+}
+
+static uint32_t hdd_get_all_band_mask(void)
+{
+	uint32_t band_mask = BIT(REG_BAND_2G) | BIT(REG_BAND_5G);
+
+#ifdef HDD_NL80211_BAND_6GHZ
+	band_mask |= BIT(REG_BAND_6G);
+#endif
+
+	return band_mask;
+}
+
+static uint32_t hdd_get_supported_nl_band_mask(void)
+{
+	uint32_t band_mask;
+
+	band_mask = BIT(HDD_NL80211_BAND_2GHZ) |
+		    BIT(HDD_NL80211_BAND_5GHZ);
+#ifdef HDD_NL80211_BAND_6GHZ
+	band_mask |= BIT(HDD_NL80211_BAND_6GHZ);
+#endif
+
+	return band_mask;
+}
+
+static uint32_t hdd_get_all_iface_mode_mask(void)
+{
+	return BIT(NL80211_IFTYPE_STATION) |
+	       BIT(NL80211_IFTYPE_AP) |
+	       BIT(NL80211_IFTYPE_P2P_GO) |
+	       BIT(NL80211_IFTYPE_P2P_CLIENT) |
+	       BIT(NL80211_IFTYPE_NAN);
+}
+
+static uint32_t hdd_convert_nl80211_to_reg_band_mask(uint32_t band_mask)
+{
+	uint32_t reg_band = 0;
+
+	if (band_mask & BIT(HDD_NL80211_BAND_2GHZ))
+		reg_band |= BIT(REG_BAND_2G);
+	if (band_mask & BIT(HDD_NL80211_BAND_5GHZ))
+		reg_band |= BIT(REG_BAND_5G);
+#ifdef HDD_NL80211_BAND_6GHZ
+	if (band_mask & BIT(HDD_NL80211_BAND_6GHZ))
+		reg_band |= BIT(REG_BAND_6G);
+#endif
+
+	return reg_band;
+}
+
+static int __wlan_hdd_cfg80211_get_usable_channel(struct wiphy *wiphy,
+						  struct wireless_dev *wdev,
+						  const void *data,
+						  int data_len)
+{
+	struct hdd_context *hdd_ctx = wiphy_priv(wiphy);
+	struct get_usable_chan_req_params req_msg = {0};
+	struct get_usable_chan_res_params *res_msg;
+	struct nlattr *tb[QCA_WLAN_VENDOR_ATTR_USABLE_CHANNELS_MAX + 1];
+	uint32_t nl_band_mask;
+	uint32_t count = 0;
+	QDF_STATUS status;
+	int ret;
+
+	(void)wdev;
+
+	ret = wlan_hdd_validate_context(hdd_ctx);
+	if (ret)
+		return ret;
+
+	res_msg = qdf_mem_malloc(NUM_CHANNELS * sizeof(*res_msg));
+	if (!res_msg) {
+		hdd_err("res_msg invalid");
+		return -ENOMEM;
+	}
+	qdf_mem_zero(res_msg, NUM_CHANNELS * sizeof(*res_msg));
+
+	if (wlan_cfg80211_nla_parse(tb,
+				    QCA_WLAN_VENDOR_ATTR_USABLE_CHANNELS_MAX,
+				    data, data_len, get_usable_channel_policy)) {
+		hdd_err("Invalid ATTR");
+		ret = -EINVAL;
+		goto err;
+	}
+
+	if (!tb[QCA_WLAN_VENDOR_ATTR_USABLE_CHANNELS_BAND_MASK]) {
+		req_msg.band_mask = hdd_get_all_band_mask();
+	} else {
+		nl_band_mask = nla_get_u32(
+			tb[QCA_WLAN_VENDOR_ATTR_USABLE_CHANNELS_BAND_MASK]);
+		if (!nl_band_mask) {
+			req_msg.band_mask = hdd_get_all_band_mask();
+		} else {
+			if (nl_band_mask & ~hdd_get_supported_nl_band_mask()) {
+				hdd_err("unsupported band mask 0x%x",
+					nl_band_mask);
+				ret = -EINVAL;
+				goto err;
+			}
+			req_msg.band_mask =
+				hdd_convert_nl80211_to_reg_band_mask(nl_band_mask);
+			if (!req_msg.band_mask) {
+				hdd_err("unsupported band mask 0x%x",
+					nl_band_mask);
+				ret = -EINVAL;
+				goto err;
+			}
+		}
+	}
+
+	if (!tb[QCA_WLAN_VENDOR_ATTR_USABLE_CHANNELS_IFACE_MODE_MASK]) {
+		req_msg.iface_mode_mask = hdd_get_all_iface_mode_mask();
+	} else {
+		req_msg.iface_mode_mask = nla_get_u32(
+			tb[QCA_WLAN_VENDOR_ATTR_USABLE_CHANNELS_IFACE_MODE_MASK]);
+		if (!req_msg.iface_mode_mask)
+			req_msg.iface_mode_mask = hdd_get_all_iface_mode_mask();
+		else if (req_msg.iface_mode_mask &
+			 ~hdd_get_all_iface_mode_mask()) {
+			hdd_err("unsupported iface mode mask 0x%x",
+				req_msg.iface_mode_mask);
+			ret = -EINVAL;
+			goto err;
+		}
+	}
+
+	if (!tb[QCA_WLAN_VENDOR_ATTR_USABLE_CHANNELS_FILTER_MASK]) {
+		req_msg.filter_mask = 0;
+	} else {
+		req_msg.filter_mask = nla_get_u32(
+			tb[QCA_WLAN_VENDOR_ATTR_USABLE_CHANNELS_FILTER_MASK]);
+		if (req_msg.filter_mask &
+		    ~(BIT(QCA_WLAN_VENDOR_FILTER_CELLULAR_COEX) |
+		      BIT(QCA_WLAN_VENDOR_FILTER_WLAN_CONCURRENCY))) {
+			hdd_err("unsupported usable channel filter mask 0x%x",
+				req_msg.filter_mask);
+			ret = -EINVAL;
+			goto err;
+		}
+	}
+
+	hdd_debug("get usable channel list for band %d mode %d filter %d",
+		  req_msg.band_mask, req_msg.iface_mode_mask,
+		  req_msg.filter_mask);
+
+	status = wlan_reg_get_usable_channel(hdd_ctx->pdev, req_msg,
+					     res_msg, &count);
+	if (QDF_IS_STATUS_ERROR(status)) {
+		hdd_err("get usable channel failed %d", status);
+		ret = -EINVAL;
+		goto err;
+	}
+
+	hdd_debug("usable channel count : %d", count);
+
+	ret = hdd_send_usable_channel(hdd_ctx, res_msg, count);
+	if (ret) {
+		hdd_err("failed to send usable channels");
+		ret = -EINVAL;
+		goto err;
+	}
+
+err:
+	qdf_mem_free(res_msg);
+	if (ret)
+		return ret;
+
+	return qdf_status_to_os_return(status);
+}
+
+static int wlan_hdd_cfg80211_get_usable_channel(struct wiphy *wiphy,
+						struct wireless_dev *wdev,
+						const void *data,
+						int data_len)
+{
+	struct osif_vdev_sync *vdev_sync;
+	int errno;
+
+	errno = osif_vdev_sync_op_start(wdev->netdev, &vdev_sync);
+	if (errno)
+		return errno;
+
+	errno = __wlan_hdd_cfg80211_get_usable_channel(wiphy, wdev,
+						       data, data_len);
+
+	osif_vdev_sync_op_stop(vdev_sync);
+
+	return errno;
+}
+
 const struct wiphy_vendor_command hdd_wiphy_vendor_commands[] = {
 	{
 		.info.vendor_id = QCA_NL80211_VENDOR_ID,
@@ -15605,6 +15934,14 @@ const struct wiphy_vendor_command hdd_wiphy_vendor_commands[] = {
 			 WIPHY_VENDOR_CMD_NEED_NETDEV |
 			 WIPHY_VENDOR_CMD_NEED_RUNNING,
 		.doit = wlan_hdd_cfg80211_getband,
+	},
+	{
+		.info.vendor_id = QCA_NL80211_VENDOR_ID,
+		.info.subcmd = QCA_NL80211_VENDOR_SUBCMD_USABLE_CHANNELS,
+		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
+			 WIPHY_VENDOR_CMD_NEED_NETDEV |
+			 WIPHY_VENDOR_CMD_NEED_RUNNING,
+		.doit = wlan_hdd_cfg80211_get_usable_channel,
 	},
 	{
 		.info.vendor_id = QCA_NL80211_VENDOR_ID,

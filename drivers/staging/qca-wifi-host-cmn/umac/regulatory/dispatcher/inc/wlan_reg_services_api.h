@@ -1060,6 +1060,21 @@ void wlan_reg_set_channel_params_for_freq(struct wlan_objmgr_pdev *pdev,
 					  struct ch_params *ch_params);
 
 /**
+ * wlan_reg_get_usable_channel() - get usable channels
+ * @pdev: pointer to pdev
+ * @req_msg: request params
+ * @res_msg: response params
+ * @count: number of usable channels returned
+ *
+ * Return: qdf status
+ */
+QDF_STATUS
+wlan_reg_get_usable_channel(struct wlan_objmgr_pdev *pdev,
+			    struct get_usable_chan_req_params req_msg,
+			    struct get_usable_chan_res_params *res_msg,
+			    uint32_t *count);
+
+/**
  * wlan_reg_get_channel_cfreq_reg_power_for_freq() - Provide the channel
  * regulatory power
  * @freq: channel center frequency
