@@ -1428,6 +1428,14 @@ static QDF_STATUS hdd_mon_rx_packet_cbk(void *context, qdf_nbuf_t rxbuf)
 		skb_next = skb->next;
 		skb->dev = adapter->dev;
 
+		if (!wlan_hdd_art_monitor_filter(adapter, skb)) {
+			adapter->stats.rx_dropped++;
+			qdf_net_buf_debug_release_skb(skb);
+			dev_kfree_skb_any(skb);
+			skb = skb_next;
+			continue;
+		}
+
 		++adapter->hdd_stats.tx_rx_stats.rx_packets[cpu_index];
 		++adapter->stats.rx_packets;
 		adapter->stats.rx_bytes += skb->len;

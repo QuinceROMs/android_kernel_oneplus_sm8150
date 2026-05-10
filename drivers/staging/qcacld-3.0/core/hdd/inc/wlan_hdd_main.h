@@ -1443,6 +1443,13 @@ struct hdd_adapter {
 	uint32_t track_dest_ipv4;
 	uint32_t mon_chan_freq;
 	uint32_t mon_bandwidth;
+	bool art_chan_configured;
+	bool art_bssid_configured;
+	uint64_t art_bssid;
+	uint32_t art_tx_rate;
+	enum tx_rate_info art_tx_rate_flags;
+	uint8_t art_tx_nss;
+	bool art_tx_rate_configured;
 	uint16_t latency_level;
 #ifdef FEATURE_MONITOR_MODE_SUPPORT
 	bool monitor_mode_vdev_up_in_progress;
@@ -4333,12 +4340,20 @@ void hdd_set_disconnect_status(struct hdd_adapter *adapter, bool disconnecting);
  */
 int wlan_hdd_set_mon_chan(struct hdd_adapter *adapter, qdf_freq_t freq,
 			  uint32_t bandwidth);
+bool wlan_hdd_art_monitor_filter(struct hdd_adapter *adapter,
+				 struct sk_buff *skb);
 #else
 static inline
 int wlan_hdd_set_mon_chan(struct hdd_adapter *adapter, qdf_freq_t freq,
 			  uint32_t bandwidth)
 {
 	return 0;
+}
+
+static inline bool wlan_hdd_art_monitor_filter(struct hdd_adapter *adapter,
+					       struct sk_buff *skb)
+{
+	return true;
 }
 #endif
 

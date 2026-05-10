@@ -8044,6 +8044,345 @@ static int drv_cmd_get_ani_level(struct hdd_adapter *adapter,
 }
 #endif
 
+#define HDD_ART_GET_IF_ADDR "ART_GET_IF_ADDR"
+#define HDD_ART_SET_CHAN "ART_SET_CHAN"
+#define HDD_ART_BSSID "ART_BSSID"
+#define HDD_ART_TX_RATE "ART_TX_RATE"
+
+static struct hdd_adapter *hdd_art_get_monitor_adapter(struct hdd_context *hdd_ctx)
+{
+	return hdd_get_adapter(hdd_ctx, QDF_MONITOR_MODE);
+}
+
+static int hdd_art_copy_response(struct hdd_priv_data *priv_data,
+				 char *buf, int len)
+{
+	if (len <= 0 || len + 1 > priv_data->total_len)
+		return -EINVAL;
+
+	if (copy_to_user(priv_data->buf, buf, len + 1)) {
+		hdd_err("failed to copy ART response to user buffer");
+		return -EFAULT;
+	}
+
+	return 0;
+}
+
+static int drv_cmd_art_get_if_addr(struct hdd_adapter *adapter,
+				   struct hdd_context *hdd_ctx,
+				   uint8_t *command,
+				   uint8_t command_len,
+				   struct hdd_priv_data *priv_data)
+{
+	struct hdd_adapter *mon_adapter = hdd_art_get_monitor_adapter(hdd_ctx);
+	char buf[ETH_ALEN * 3 + 1];
+	int len;
+
+	if (!mon_adapter) {
+		hdd_err("ART monitor interface is not present");
+		return -ENODEV;
+	}
+
+	len = scnprintf(buf, sizeof(buf), QDF_FULL_MAC_FMT "\n",
+			QDF_FULL_MAC_REF(mon_adapter->mac_addr.bytes));
+
+	return hdd_art_copy_response(priv_data, buf, len);
+}
+
+static int hdd_art_parse_band(const char *band, qdf_freq_t freq)
+{
+	if (!strcmp(band, "2g"))
+		return WLAN_REG_IS_24GHZ_CH_FREQ(freq) ? 0 : -EINVAL;
+	if (!strcmp(band, "5g"))
+		return WLAN_REG_IS_5GHZ_CH_FREQ(freq) ? 0 : -EINVAL;
+	if (!strcmp(band, "6g")) {
+		hdd_err("ART 6 GHz channel is not supported");
+		return -EINVAL;
+	}
+
+	return -EINVAL;
+}
+
+static int hdd_art_bw_to_ch_width(uint32_t bw, enum phy_ch_width *ch_width)
+{
+	switch (bw) {
+	case 20:
+		*ch_width = CH_WIDTH_20MHZ;
+		return 0;
+	case 40:
+		*ch_width = CH_WIDTH_40MHZ;
+		return 0;
+	case 80:
+		*ch_width = CH_WIDTH_80MHZ;
+		return 0;
+	case 160:
+		*ch_width = CH_WIDTH_160MHZ;
+		return 0;
+	default:
+		return -EINVAL;
+	}
+}
+
+static void hdd_art_set_channel(struct hdd_adapter *adapter, qdf_freq_t freq,
+				enum phy_ch_width ch_width)
+{
+	WRITE_ONCE(adapter->mon_chan_freq, freq);
+	WRITE_ONCE(adapter->mon_bandwidth, ch_width);
+	/* Publish channel data before enabling ART TX channel override. */
+	smp_wmb();
+	WRITE_ONCE(adapter->art_chan_configured, true);
+}
+
+static int drv_cmd_art_set_chan(struct hdd_adapter *adapter,
+				struct hdd_context *hdd_ctx,
+				uint8_t *command,
+				uint8_t command_len,
+				struct hdd_priv_data *priv_data)
+{
+	struct hdd_adapter *mon_adapter = hdd_art_get_monitor_adapter(hdd_ctx);
+	enum phy_ch_width ch_width;
+	qdf_freq_t freq;
+	uint32_t channel;
+	uint32_t bw;
+	char band[4];
+	int ret;
+
+	if (!mon_adapter) {
+		hdd_err("ART monitor interface is not present");
+		return -ENODEV;
+	}
+
+	if (sscanf(command + command_len, "%u %3s %u",
+		   &channel, band, &bw) != 3) {
+		hdd_err("invalid ART_SET_CHAN command");
+		return -EINVAL;
+	}
+
+	if (!hdd_check_and_fill_freq(channel, &freq) ||
+	    hdd_art_parse_band(band, freq) ||
+	    hdd_art_bw_to_ch_width(bw, &ch_width)) {
+		hdd_err("invalid ART_SET_CHAN channel=%u band=%s bw=%u",
+			channel, band, bw);
+		return -EINVAL;
+	}
+
+	ret = wlan_hdd_set_mon_chan(mon_adapter, freq, ch_width);
+	if (ret)
+		return ret;
+
+	hdd_art_set_channel(adapter, freq, ch_width);
+	hdd_art_set_channel(mon_adapter, freq, ch_width);
+
+	return 0;
+}
+
+static int hdd_art_parse_mac(const char *mac, struct qdf_mac_addr *addr)
+{
+	if (!hdd_is_valid_mac_address((const uint8_t *)mac))
+		return -EINVAL;
+
+	addr->bytes[0] = hex_to_bin(mac[0]) << 4 | hex_to_bin(mac[1]);
+	addr->bytes[1] = hex_to_bin(mac[3]) << 4 | hex_to_bin(mac[4]);
+	addr->bytes[2] = hex_to_bin(mac[6]) << 4 | hex_to_bin(mac[7]);
+	addr->bytes[3] = hex_to_bin(mac[9]) << 4 | hex_to_bin(mac[10]);
+	addr->bytes[4] = hex_to_bin(mac[12]) << 4 | hex_to_bin(mac[13]);
+	addr->bytes[5] = hex_to_bin(mac[15]) << 4 | hex_to_bin(mac[16]);
+
+	return qdf_is_macaddr_zero(addr) ? -EINVAL : 0;
+}
+
+static uint64_t hdd_art_mac_to_u64(const struct qdf_mac_addr *addr)
+{
+	uint64_t mac = 0;
+
+	qdf_mem_copy(&mac, addr->bytes, ETH_ALEN);
+
+	return mac;
+}
+
+static void hdd_art_set_bssid(struct hdd_adapter *adapter,
+			      const struct qdf_mac_addr *bssid)
+{
+	WRITE_ONCE(adapter->art_bssid, hdd_art_mac_to_u64(bssid));
+	/* Publish BSSID before enabling lockless monitor RX filtering. */
+	smp_wmb();
+	WRITE_ONCE(adapter->art_bssid_configured, true);
+}
+
+static int drv_cmd_art_bssid(struct hdd_adapter *adapter,
+			     struct hdd_context *hdd_ctx,
+			     uint8_t *command,
+			     uint8_t command_len,
+			     struct hdd_priv_data *priv_data)
+{
+	struct hdd_adapter *mon_adapter = hdd_art_get_monitor_adapter(hdd_ctx);
+	struct qdf_mac_addr bssid;
+	char mac[18];
+
+	if (sscanf(command + command_len, "%17s", mac) != 1 ||
+	    hdd_art_parse_mac(mac, &bssid)) {
+		hdd_err("invalid ART_BSSID command");
+		return -EINVAL;
+	}
+
+	hdd_art_set_bssid(adapter, &bssid);
+	if (mon_adapter)
+		hdd_art_set_bssid(mon_adapter, &bssid);
+
+	return 0;
+}
+
+static int hdd_art_rate_flags(const char *format, enum phy_ch_width ch_width,
+			      enum tx_rate_info *flags)
+{
+	if (!strcmp(format, "HT")) {
+		*flags = ch_width == CH_WIDTH_20MHZ ? TX_RATE_HT20 :
+						      TX_RATE_HT40;
+		return 0;
+	}
+
+	if (!strcmp(format, "VHT")) {
+		if (ch_width == CH_WIDTH_160MHZ)
+			*flags = TX_RATE_VHT160;
+		else if (ch_width == CH_WIDTH_80MHZ)
+			*flags = TX_RATE_VHT80;
+		else if (ch_width == CH_WIDTH_40MHZ)
+			*flags = TX_RATE_VHT40;
+		else
+			*flags = TX_RATE_VHT20;
+		return 0;
+	}
+
+	return -EINVAL;
+}
+
+static int hdd_art_mcs_rate_x10(const char *format, enum phy_ch_width ch_width,
+				uint32_t mcs, uint32_t nss, uint32_t *rate)
+{
+	static const uint16_t ht20[] = {65, 130, 195, 260, 390, 520, 585, 650};
+	static const uint16_t ht40[] = {135, 270, 405, 540, 810, 1080, 1215, 1350};
+	static const uint16_t vht20[] = {65, 130, 195, 260, 390, 520, 585, 650, 780, 867};
+	static const uint16_t vht40[] = {135, 270, 405, 540, 810, 1080, 1215, 1350, 1620, 1800};
+	static const uint16_t vht80[] = {293, 585, 878, 1170, 1755, 2340, 2633, 2925, 3510, 3900};
+	const uint16_t *rates;
+	uint32_t mcs_idx = mcs;
+
+	if (!strcmp(format, "HT")) {
+		rates = ch_width == CH_WIDTH_20MHZ ? ht20 : ht40;
+		mcs_idx = mcs < ARRAY_SIZE(ht20) ?
+			  mcs + (nss - 1) * ARRAY_SIZE(ht20) : mcs;
+		if (mcs_idx > 15)
+			return -EINVAL;
+		*rate = rates[mcs_idx % ARRAY_SIZE(ht20)] *
+			(mcs_idx / ARRAY_SIZE(ht20) + 1);
+		return 0;
+	}
+
+	if (strcmp(format, "VHT"))
+		return -EINVAL;
+
+	if (mcs >= ARRAY_SIZE(vht20))
+		return -EINVAL;
+
+	if (ch_width == CH_WIDTH_80MHZ || ch_width == CH_WIDTH_160MHZ)
+		rates = vht80;
+	else if (ch_width == CH_WIDTH_40MHZ)
+		rates = vht40;
+	else
+		rates = vht20;
+
+	*rate = rates[mcs] * nss;
+	if (ch_width == CH_WIDTH_160MHZ)
+		*rate *= 2;
+	return 0;
+}
+
+static int hdd_art_send_rate_update(struct hdd_adapter *adapter,
+				    struct hdd_context *hdd_ctx,
+				    uint32_t rate,
+				    enum tx_rate_info flags,
+				    uint32_t nss)
+{
+	tSirRateUpdateInd rate_update = {0};
+	QDF_STATUS status;
+
+	rate_update.nss = nss - 1;
+	rate_update.dev_mode = adapter->device_mode;
+	rate_update.bcastDataRate = -1;
+	rate_update.reliableMcastDataRate = -1;
+	rate_update.mcastDataRate24GHz = rate;
+	rate_update.mcastDataRate24GHzTxFlag = flags;
+	rate_update.mcastDataRate5GHz = rate;
+	rate_update.mcastDataRate5GHzTxFlag = flags;
+	qdf_copy_macaddr(&rate_update.bssid, &adapter->mac_addr);
+
+	status = sme_send_rate_update_ind(hdd_ctx->mac_handle, &rate_update);
+	if (QDF_IS_STATUS_ERROR(status)) {
+		hdd_err("ART_TX_RATE failed for %s(%d), status=%d",
+			qdf_opmode_str(adapter->device_mode),
+			adapter->device_mode, status);
+		return -EFAULT;
+	}
+
+	adapter->art_tx_rate = rate;
+	adapter->art_tx_rate_flags = flags;
+	adapter->art_tx_nss = nss - 1;
+	adapter->art_tx_rate_configured = true;
+
+	return 0;
+}
+
+static int drv_cmd_art_tx_rate(struct hdd_adapter *adapter,
+			       struct hdd_context *hdd_ctx,
+			       uint8_t *command,
+			       uint8_t command_len,
+			       struct hdd_priv_data *priv_data)
+{
+	struct hdd_adapter *mon_adapter = hdd_art_get_monitor_adapter(hdd_ctx);
+	struct hdd_adapter *rate_adapter = mon_adapter ?: adapter;
+	enum phy_ch_width ch_width;
+	enum tx_rate_info flags;
+	uint32_t rate;
+	uint32_t mcs;
+	uint32_t nss;
+	char format[8];
+	int ret;
+
+	if (sscanf(command + command_len, "%7s %u %u",
+		   format, &mcs, &nss) != 3) {
+		hdd_err("invalid ART_TX_RATE command");
+		return -EINVAL;
+	}
+
+	if (!nss || nss > 2) {
+		hdd_err("invalid ART_TX_RATE nss=%u", nss);
+		return -EINVAL;
+	}
+
+	if (!rate_adapter->mon_chan_freq) {
+		hdd_err("ART_TX_RATE requires ART_SET_CHAN first");
+		return -EINVAL;
+	}
+
+	ch_width = rate_adapter->mon_bandwidth ?: CH_WIDTH_20MHZ;
+	if (hdd_art_rate_flags(format, ch_width, &flags) ||
+	    hdd_art_mcs_rate_x10(format, ch_width, mcs, nss, &rate)) {
+		hdd_err("invalid ART_TX_RATE format=%s mcs=%u nss=%u",
+			format, mcs, nss);
+		return -EINVAL;
+	}
+
+	ret = hdd_art_send_rate_update(rate_adapter, hdd_ctx, rate, flags, nss);
+	if (!ret && rate_adapter != adapter) {
+		adapter->art_tx_rate = rate;
+		adapter->art_tx_rate_flags = flags;
+		adapter->art_tx_nss = nss - 1;
+		adapter->art_tx_rate_configured = true;
+	}
+
+	return ret;
+}
+
 #ifdef FUNC_CALL_MAP
 static int drv_cmd_get_function_call_map(struct hdd_adapter *adapter,
 					 struct hdd_context *hdd_ctx,
@@ -8111,6 +8450,10 @@ static int drv_cmd_get_function_call_map(struct hdd_adapter *adapter,
  * IOCTL driver commands and the handler for each of them.
  */
 static const struct hdd_drv_cmd hdd_drv_cmds[] = {
+	{HDD_ART_GET_IF_ADDR,          drv_cmd_art_get_if_addr, false},
+	{HDD_ART_SET_CHAN,             drv_cmd_art_set_chan, true},
+	{HDD_ART_BSSID,                drv_cmd_art_bssid, true},
+	{HDD_ART_TX_RATE,              drv_cmd_art_tx_rate, true},
 	{"P2P_DEV_ADDR",              drv_cmd_p2p_dev_addr, false},
 	{"P2P_SET_NOA",               drv_cmd_p2p_set_noa, true},
 	{"P2P_SET_PS",                drv_cmd_p2p_set_ps, true},
@@ -8515,4 +8858,3 @@ int hdd_ioctl(struct net_device *net_dev, struct ifreq *ifr, int cmd)
 
 	return errno;
 }
-
