@@ -33,6 +33,7 @@
 #include <linux/cpu.h>
 #include <linux/etherdevice.h>
 #include <linux/firmware.h>
+#include <linux/ieee80211.h>
 #include <linux/kernel.h>
 #include <wlan_hdd_tx_rx.h>
 #include <wni_api.h>
@@ -65,6 +66,7 @@
 #include "qdf_trace.h"
 #include "qdf_types.h"
 #include <cdp_txrx_peer_ops.h>
+#include <cdp_txrx_cmn.h>
 #include <cdp_txrx_misc.h>
 #include <cdp_txrx_stats.h>
 #include "cdp_txrx_flow_ctrl_legacy.h"
@@ -72,6 +74,7 @@
 #include <net/addrconf.h>
 #include <linux/wireless.h>
 #include <net/cfg80211.h>
+#include <net/ieee80211_radiotap.h>
 #include <linux/inetdevice.h>
 #include <net/addrconf.h>
 #include "wlan_hdd_cfg80211.h"
@@ -2653,7 +2656,6 @@ static int __hdd_mon_open(struct net_device *dev)
 			hdd_err("hdd_start_adapters() successful !");
 		}
 		hdd_mon_turn_off_ps_and_wow(hdd_ctx);
-		set_bit(DEVICE_IFACE_OPENED, &adapter->event_flags);
 	}
 
 	ret = hdd_set_mon_rx_cb(dev);
@@ -2662,6 +2664,10 @@ static int __hdd_mon_open(struct net_device *dev)
 		ret = hdd_enable_monitor_mode(dev);
 
 	if (!ret) {
+		set_bit(DEVICE_IFACE_OPENED, &adapter->event_flags);
+		wlan_hdd_netif_queue_control(adapter,
+					     WLAN_START_ALL_NETIF_QUEUE_N_CARRIER,
+					     WLAN_CONTROL_PATH);
 		hdd_set_current_throughput_level(hdd_ctx,
 						 PLD_BUS_WIDTH_VERY_HIGH);
 		pld_request_bus_bandwidth(hdd_ctx->parent_dev,
@@ -2693,6 +2699,154 @@ static int hdd_mon_open(struct net_device *net_dev)
 	osif_vdev_sync_trans_stop(vdev_sync);
 
 	return errno;
+}
+
+static bool hdd_mon_dp_mgmt_tx_supported(ol_txrx_soc_handle soc)
+{
+	return soc && soc->ops && soc->ops->cmn_drv_ops &&
+	       soc->ops->cmn_drv_ops->txrx_mgmt_send_ext;
+}
+
+static bool hdd_mon_parse_tx_radiotap(struct sk_buff *skb,
+				      uint16_t *chanfreq,
+				      bool *use_6mbps)
+{
+	struct ieee80211_radiotap_iterator iterator;
+	struct ieee80211_radiotap_header *rthdr;
+	uint16_t rt_len;
+	int ret;
+
+	if (skb->len < sizeof(*rthdr))
+		return false;
+
+	rthdr = (struct ieee80211_radiotap_header *)skb->data;
+	if (rthdr->it_version)
+		return false;
+
+	rt_len = ieee80211_get_radiotap_len(skb->data);
+	if (rt_len < sizeof(*rthdr) || rt_len > skb->len)
+		return false;
+
+	ret = ieee80211_radiotap_iterator_init(&iterator, rthdr,
+					       skb->len, NULL);
+	if (ret)
+		return false;
+
+	while (!ret) {
+		ret = ieee80211_radiotap_iterator_next(&iterator);
+		if (ret)
+			continue;
+
+		switch (iterator.this_arg_index) {
+		case IEEE80211_RADIOTAP_FLAGS:
+			if (*iterator.this_arg & IEEE80211_RADIOTAP_F_FCS) {
+				if (skb->len < rt_len + FCS_LEN)
+					return false;
+
+				skb_trim(skb, skb->len - FCS_LEN);
+			}
+			break;
+		case IEEE80211_RADIOTAP_CHANNEL:
+			*chanfreq = get_unaligned_le16(iterator.this_arg);
+			break;
+		case IEEE80211_RADIOTAP_RATE:
+			if (*iterator.this_arg >= 12)
+				*use_6mbps = true;
+			break;
+		default:
+			break;
+		}
+	}
+
+	if (ret != -ENOENT)
+		return false;
+
+	if (skb->len <= rt_len)
+		return false;
+
+	skb_pull(skb, rt_len);
+	return true;
+}
+
+static struct hdd_adapter *
+hdd_mon_select_tx_adapter(struct hdd_context *hdd_ctx,
+			  struct hdd_adapter *mon_adapter,
+			  uint16_t *chanfreq)
+{
+	struct hdd_adapter *sta_adapter;
+
+	sta_adapter = hdd_get_adapter(hdd_ctx, QDF_STA_MODE);
+	if (sta_adapter &&
+	    sta_adapter->session.station.conn_info.conn_state ==
+	    eConnectionState_Associated) {
+		if (!*chanfreq)
+			*chanfreq =
+				sta_adapter->session.station.conn_info.chan_freq;
+		return sta_adapter;
+	}
+
+	if (!*chanfreq)
+		*chanfreq = mon_adapter->mon_chan_freq;
+
+	return *chanfreq ? mon_adapter : NULL;
+}
+
+static netdev_tx_t hdd_mon_start_xmit(struct sk_buff *skb,
+				      struct net_device *dev)
+{
+	struct hdd_adapter *adapter = WLAN_HDD_GET_PRIV_PTR(dev);
+	struct hdd_adapter *tx_adapter;
+	struct hdd_context *hdd_ctx;
+	struct ieee80211_hdr *hdr;
+	ol_txrx_soc_handle soc;
+	uint16_t chanfreq = 0;
+	bool use_6mbps = false;
+	uint32_t tx_len;
+	int ret;
+
+	if (!adapter || adapter->magic != WLAN_HDD_ADAPTER_MAGIC)
+		goto drop_no_stats;
+
+	hdd_ctx = WLAN_HDD_GET_CTX(adapter);
+	if (wlan_hdd_validate_context(hdd_ctx))
+		goto drop;
+
+	if (!hdd_mon_parse_tx_radiotap(skb, &chanfreq, &use_6mbps))
+		goto drop;
+
+	if (skb->len < sizeof(struct ieee80211_hdr_3addr))
+		goto drop;
+
+	hdr = (struct ieee80211_hdr *)skb->data;
+	if (!ieee80211_is_mgmt(hdr->frame_control))
+		goto drop;
+
+	tx_adapter = hdd_mon_select_tx_adapter(hdd_ctx, adapter, &chanfreq);
+	if (!tx_adapter || !chanfreq)
+		goto drop;
+
+	if (WLAN_REG_IS_5GHZ_CH_FREQ(chanfreq))
+		use_6mbps = true;
+
+	soc = cds_get_context(QDF_MODULE_ID_SOC);
+	if (!hdd_mon_dp_mgmt_tx_supported(soc))
+		goto drop;
+
+	tx_len = skb->len;
+	ret = cdp_mgmt_send_ext(soc, tx_adapter->vdev_id, skb, 0, use_6mbps,
+				chanfreq);
+	if (ret)
+		goto drop;
+
+	adapter->stats.tx_packets++;
+	adapter->stats.tx_bytes += tx_len;
+	return NETDEV_TX_OK;
+
+drop:
+	adapter->stats.tx_dropped++;
+drop_no_stats:
+	dev_kfree_skb_any(skb);
+	return NETDEV_TX_OK;
 }
 #endif
 
@@ -4858,10 +5012,11 @@ static const struct net_device_ops wlan_drv_ops = {
 };
 
 #ifdef FEATURE_MONITOR_MODE_SUPPORT
-/* Monitor mode net_device_ops, doesnot Tx and most of operations. */
+/* Monitor mode net_device_ops, supports raw management frame injection. */
 static const struct net_device_ops wlan_mon_drv_ops = {
 	.ndo_open = hdd_mon_open,
 	.ndo_stop = hdd_stop,
+	.ndo_start_xmit = hdd_mon_start_xmit,
 	.ndo_get_stats = hdd_get_stats,
 };
 
@@ -18180,4 +18335,3 @@ static const struct kernel_param_ops timer_multiplier_ops = {
 };
 
 module_param_cb(timer_multiplier, &timer_multiplier_ops, NULL, 0644);
-
