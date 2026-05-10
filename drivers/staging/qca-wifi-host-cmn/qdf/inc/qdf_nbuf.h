@@ -248,6 +248,9 @@
  * @rxpcu_filter_pass: Flag which indicates whether RX packets are received in
  *						BSS mode(not in promisc mode)
  * @rssi_chain: Rssi chain per nss per bw
+ * @tx_status: Packet capture tx status
+ * @tx_retry_cnt: Packet capture tx retry count
+ * @add_rtap_ext: Add packet capture radiotap tx extension
  */
 struct mon_rx_status {
 	uint64_t tsft;
@@ -329,6 +332,9 @@ struct mon_rx_status {
 	uint8_t rxpcu_filter_pass;
 	int8_t rssi_chain[8][8];
 	uint32_t rx_antenna;
+	uint8_t tx_status;
+	uint8_t tx_retry_cnt;
+	bool add_rtap_ext;
 };
 
 /**
