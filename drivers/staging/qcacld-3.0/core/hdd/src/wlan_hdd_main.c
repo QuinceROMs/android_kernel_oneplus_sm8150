@@ -2843,6 +2843,13 @@ hdd_mon_select_tx_adapter(struct hdd_context *hdd_ctx,
 {
 	struct hdd_adapter *sta_adapter;
 
+	if (!*chanfreq && READ_ONCE(mon_adapter->art_chan_configured)) {
+		/* Pair with ART_SET_CHAN publishing the monitor frequency. */
+		smp_rmb();
+		*chanfreq = READ_ONCE(mon_adapter->mon_chan_freq);
+		return *chanfreq ? mon_adapter : NULL;
+	}
+
 	sta_adapter = hdd_get_adapter(hdd_ctx, QDF_STA_MODE);
 	if (sta_adapter &&
 	    sta_adapter->session.station.conn_info.conn_state ==
@@ -2854,9 +2861,60 @@ hdd_mon_select_tx_adapter(struct hdd_context *hdd_ctx,
 	}
 
 	if (!*chanfreq)
-		*chanfreq = mon_adapter->mon_chan_freq;
+		*chanfreq = READ_ONCE(mon_adapter->mon_chan_freq);
 
 	return *chanfreq ? mon_adapter : NULL;
+}
+
+static bool hdd_art_mac_addr_equal(const uint8_t *addr, uint64_t bssid)
+{
+	uint64_t addr64 = 0;
+
+	qdf_mem_copy(&addr64, addr, ETH_ALEN);
+
+	return addr64 == bssid;
+}
+
+bool wlan_hdd_art_monitor_filter(struct hdd_adapter *adapter, struct sk_buff *skb)
+{
+	struct ieee80211_radiotap_header *rthdr;
+	struct ieee80211_hdr *hdr;
+	uint64_t art_bssid;
+	uint16_t rt_len;
+
+	if (!READ_ONCE(adapter->art_bssid_configured))
+		return true;
+
+	/* Pair with ART_BSSID publishing the packed BSSID. */
+	smp_rmb();
+	art_bssid = READ_ONCE(adapter->art_bssid);
+	if (!art_bssid)
+		return true;
+
+	if (skb->len < sizeof(*rthdr))
+		return false;
+
+	rthdr = (struct ieee80211_radiotap_header *)skb->data;
+	if (rthdr->it_version)
+		return false;
+
+	rt_len = ieee80211_get_radiotap_len(skb->data);
+	if (rt_len < sizeof(*rthdr) ||
+	    skb->len < rt_len + sizeof(struct ieee80211_hdr_3addr))
+		return false;
+
+	hdr = (struct ieee80211_hdr *)(skb->data + rt_len);
+	if (hdd_art_mac_addr_equal(hdr->addr1, art_bssid) ||
+	    hdd_art_mac_addr_equal(hdr->addr2, art_bssid) ||
+	    hdd_art_mac_addr_equal(hdr->addr3, art_bssid))
+		return true;
+
+	if (ieee80211_has_a4(hdr->frame_control) &&
+	    skb->len >= rt_len + sizeof(struct ieee80211_hdr) &&
+	    hdd_art_mac_addr_equal(hdr->addr4, art_bssid))
+		return true;
+
+	return false;
 }
 
 static netdev_tx_t hdd_mon_start_xmit(struct sk_buff *skb,
@@ -6985,6 +7043,15 @@ QDF_STATUS hdd_stop_adapter(struct hdd_context *hdd_ctx,
 
 	if (adapter->vdev_id != WLAN_UMAC_VDEV_ID_MAX)
 		wlan_hdd_cfg80211_deregister_frames(adapter);
+
+#ifdef FEATURE_MONITOR_MODE_SUPPORT
+	/* Lockless ART monitor state — clear on teardown so a recycled
+	 * adapter slot does not inherit a stale channel/BSSID/rate.
+	 */
+	WRITE_ONCE(adapter->art_chan_configured, false);
+	WRITE_ONCE(adapter->art_bssid_configured, false);
+	WRITE_ONCE(adapter->art_tx_rate_configured, false);
+#endif
 
 	hdd_nud_ignore_tracking(adapter, true);
 	hdd_nud_reset_tracking(adapter);
