@@ -2582,6 +2582,68 @@ bool hdd_is_valid_mac_address(const uint8_t *mac_addr)
 	return xdigit == 12 && (separator == 5 || separator == 0);
 }
 
+#define HDD_MON_TX_RADIOTAP_HEADROOM 64
+#define HDD_MON_TX_MIN_CTL_LEN 10
+#define HDD_MON_TX_CTL_COMMON_LEN 16
+#define HDD_MON_TX_CTL_CONTROL_LEN 2
+#define HDD_MON_TX_BA_START_SEQ_LEN 2
+#define HDD_MON_TX_BA_PER_TID_INFO_LEN 2
+#define HDD_MON_TX_BA_COMPRESSED_BITMAP_LEN 8
+#define HDD_MON_TX_BA_BASIC_BITMAP_LEN 128
+
+static uint32_t hdd_mon_tx_ba_tid_count(uint16_t control)
+{
+	return ((control & IEEE80211_BAR_CTRL_TID_INFO_MASK) >>
+		IEEE80211_BAR_CTRL_TID_INFO_SHIFT) + 1;
+}
+
+static uint16_t hdd_mon_tx_ctl_control(struct ieee80211_hdr *hdr)
+{
+	__le16 control;
+
+	qdf_mem_copy(&control, (uint8_t *)hdr + HDD_MON_TX_CTL_COMMON_LEN,
+		     sizeof(control));
+
+	return le16_to_cpu(control);
+}
+
+static uint32_t hdd_mon_tx_min_len(struct ieee80211_hdr *hdr)
+{
+	__le16 fc = hdr->frame_control;
+	uint16_t control;
+	uint32_t tid_count;
+	uint32_t bitmap_len;
+	bool multi_tid;
+
+	if (!ieee80211_is_back_req(fc) && !ieee80211_is_back(fc))
+		return ieee80211_hdrlen(fc);
+
+	control = hdd_mon_tx_ctl_control(hdr);
+	multi_tid = control & IEEE80211_BAR_CTRL_MULTI_TID;
+	tid_count = multi_tid ? hdd_mon_tx_ba_tid_count(control) : 1;
+
+	if (ieee80211_is_back_req(fc)) {
+		if (!multi_tid)
+			return sizeof(struct ieee80211_bar);
+
+		return HDD_MON_TX_CTL_COMMON_LEN + HDD_MON_TX_CTL_CONTROL_LEN +
+		       tid_count * (HDD_MON_TX_BA_PER_TID_INFO_LEN +
+				    HDD_MON_TX_BA_START_SEQ_LEN);
+	}
+
+	bitmap_len = control & IEEE80211_BAR_CTRL_CBMTID_COMPRESSED_BA ?
+		     HDD_MON_TX_BA_COMPRESSED_BITMAP_LEN :
+		     HDD_MON_TX_BA_BASIC_BITMAP_LEN;
+
+	if (!multi_tid)
+		return HDD_MON_TX_CTL_COMMON_LEN + HDD_MON_TX_CTL_CONTROL_LEN +
+		       HDD_MON_TX_BA_START_SEQ_LEN + bitmap_len;
+
+	return HDD_MON_TX_CTL_COMMON_LEN + HDD_MON_TX_CTL_CONTROL_LEN +
+	       tid_count * (HDD_MON_TX_BA_PER_TID_INFO_LEN +
+			    HDD_MON_TX_BA_START_SEQ_LEN + bitmap_len);
+}
+
 /**
  * hdd_mon_mode_ether_setup() - Update monitor mode struct net_device.
  * @dev: Handle to struct net_device to be updated.
@@ -2592,8 +2654,8 @@ static void hdd_mon_mode_ether_setup(struct net_device *dev)
 {
 	dev->header_ops         = NULL;
 	dev->type               = ARPHRD_IEEE80211_RADIOTAP;
-	dev->hard_header_len    = ETH_HLEN;
-	dev->mtu                = ETH_DATA_LEN;
+	dev->hard_header_len    = HDD_MON_TX_RADIOTAP_HEADROOM;
+	dev->mtu                = IEEE80211_MAX_FRAME_LEN;
 	dev->addr_len           = ETH_ALEN;
 	dev->tx_queue_len       = 1000; /* Ethernet wants good queues */
 	dev->flags              = IFF_BROADCAST|IFF_MULTICAST;
@@ -2707,6 +2769,12 @@ static bool hdd_mon_dp_mgmt_tx_supported(ol_txrx_soc_handle soc)
 	       soc->ops->cmn_drv_ops->txrx_mgmt_send_ext;
 }
 
+static bool hdd_mon_dp_raw_tx_supported(ol_txrx_soc_handle soc)
+{
+	return soc && soc->ops && soc->ops->raw_ops &&
+	       soc->ops->raw_ops->txrx_raw_send_ext;
+}
+
 static bool hdd_mon_parse_tx_radiotap(struct sk_buff *skb,
 				      uint16_t *chanfreq,
 				      bool *use_6mbps)
@@ -2801,6 +2869,8 @@ static netdev_tx_t hdd_mon_start_xmit(struct sk_buff *skb,
 	ol_txrx_soc_handle soc;
 	uint16_t chanfreq = 0;
 	bool use_6mbps = false;
+	bool is_raw;
+	bool is_mgmt;
 	uint32_t tx_len;
 	int ret;
 
@@ -2814,11 +2884,27 @@ static netdev_tx_t hdd_mon_start_xmit(struct sk_buff *skb,
 	if (!hdd_mon_parse_tx_radiotap(skb, &chanfreq, &use_6mbps))
 		goto drop;
 
-	if (skb->len < sizeof(struct ieee80211_hdr_3addr))
+	if (skb->len > IEEE80211_MAX_FRAME_LEN)
+		goto drop;
+
+	if (skb->len < HDD_MON_TX_MIN_CTL_LEN)
 		goto drop;
 
 	hdr = (struct ieee80211_hdr *)skb->data;
-	if (!ieee80211_is_mgmt(hdr->frame_control))
+	is_mgmt = ieee80211_is_mgmt(hdr->frame_control);
+	is_raw = ieee80211_is_data(hdr->frame_control) ||
+		 ieee80211_is_ctl(hdr->frame_control);
+	if (!is_mgmt && !is_raw)
+		goto drop;
+
+	if (ieee80211_is_back_req(hdr->frame_control) ||
+	    ieee80211_is_back(hdr->frame_control)) {
+		if (skb->len < HDD_MON_TX_CTL_COMMON_LEN +
+			       HDD_MON_TX_CTL_CONTROL_LEN)
+			goto drop;
+	}
+
+	if (skb->len < hdd_mon_tx_min_len(hdr))
 		goto drop;
 
 	tx_adapter = hdd_mon_select_tx_adapter(hdd_ctx, adapter, &chanfreq);
@@ -2829,12 +2915,21 @@ static netdev_tx_t hdd_mon_start_xmit(struct sk_buff *skb,
 		use_6mbps = true;
 
 	soc = cds_get_context(QDF_MODULE_ID_SOC);
-	if (!hdd_mon_dp_mgmt_tx_supported(soc))
+	if (is_mgmt && !hdd_mon_dp_mgmt_tx_supported(soc))
+		goto drop;
+
+	if (!is_mgmt && !hdd_mon_dp_raw_tx_supported(soc))
 		goto drop;
 
 	tx_len = skb->len;
-	ret = cdp_mgmt_send_ext(soc, tx_adapter->vdev_id, skb, 0, use_6mbps,
-				chanfreq);
+	if (is_mgmt)
+		ret = cdp_mgmt_send_ext(soc, tx_adapter->vdev_id, skb, 0,
+					use_6mbps, chanfreq);
+	else
+		ret = soc->ops->raw_ops->txrx_raw_send_ext(soc,
+							   tx_adapter->vdev_id,
+							   skb, use_6mbps,
+							   chanfreq);
 	if (ret)
 		goto drop;
 

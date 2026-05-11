@@ -259,6 +259,11 @@ ol_txrx_mgmt_send_ext(struct cdp_soc_t *soc, uint8_t vdev_id,
 		      qdf_nbuf_t tx_mgmt_frm,
 		      uint8_t type, uint8_t use_6mbps, uint16_t chanfreq);
 
+int
+ol_txrx_raw_send_ext(struct cdp_soc_t *soc, uint8_t vdev_id,
+		     qdf_nbuf_t tx_frm, uint8_t use_6mbps,
+		     uint16_t chanfreq);
+
 qdf_nbuf_t
 ol_tx_reinject(struct ol_txrx_vdev_t *vdev, qdf_nbuf_t msdu, uint16_t peer_id);
 
