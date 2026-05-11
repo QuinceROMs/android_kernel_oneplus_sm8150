@@ -942,6 +942,10 @@ struct cdp_raw_ops {
 	QDF_STATUS
 	(*rsim_get_astentry)(struct cdp_soc_t *soc, uint8_t vdev_id,
 			     qdf_nbuf_t *pnbuf, struct cdp_raw_ast *raw_ast);
+
+	int (*txrx_raw_send_ext)(struct cdp_soc_t *soc, uint8_t vdev_id,
+				 qdf_nbuf_t tx_frm, uint8_t use_6mbps,
+				 uint16_t chanfreq);
 };
 
 #ifdef PEER_FLOW_CONTROL

@@ -6438,7 +6438,9 @@ static struct cdp_wds_ops ol_ops_wds = {
 };
 
 static struct cdp_raw_ops ol_ops_raw = {
-	/* EMPTY FOR MCL */
+#ifndef CONFIG_HL_SUPPORT
+	.txrx_raw_send_ext = ol_txrx_raw_send_ext,
+#endif
 };
 
 #ifdef WLAN_FEATURE_PKT_CAPTURE

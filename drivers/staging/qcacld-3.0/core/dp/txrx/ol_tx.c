@@ -20,6 +20,9 @@
 #include <qdf_nbuf.h>           /* qdf_nbuf_t, etc. */
 #include <qdf_atomic.h>         /* qdf_atomic_read, etc. */
 #include <qdf_util.h>           /* qdf_unlikely */
+#include <linux/etherdevice.h>
+#include <linux/ieee80211.h>
+#include <net/cfg80211.h>
 
 /* APIs for other modules */
 #include <htt.h>                /* HTT_TX_EXT_TID_MGMT */
@@ -40,6 +43,14 @@
 #include <ol_txrx_encap.h>      /* OL_TX_ENCAP, etc */
 #include <ol_tx.h>
 #include <cdp_txrx_ipa.h>
+
+#define OL_TXRX_RAW_MIN_CTL_LEN 10
+#define OL_TXRX_RAW_CTL_COMMON_LEN 16
+#define OL_TXRX_RAW_CTL_CONTROL_LEN 2
+#define OL_TXRX_RAW_BA_START_SEQ_LEN 2
+#define OL_TXRX_RAW_BA_PER_TID_INFO_LEN 2
+#define OL_TXRX_RAW_BA_COMPRESSED_BITMAP_LEN 8
+#define OL_TXRX_RAW_BA_BASIC_BITMAP_LEN 128
 
 /**
  * ol_tx_data() - send data frame
@@ -249,4 +260,168 @@ ol_txrx_mgmt_send_ext(struct cdp_soc_t *soc_hdl, uint8_t vdev_id,
 						&tx_msdu_info, chanfreq);
 
 	return 0;               /* accepted the tx mgmt frame */
+}
+
+static uint32_t ol_txrx_raw_ba_tid_count(uint16_t control)
+{
+	return ((control & IEEE80211_BAR_CTRL_TID_INFO_MASK) >>
+		IEEE80211_BAR_CTRL_TID_INFO_SHIFT) + 1;
+}
+
+static uint16_t ol_txrx_raw_ctl_control(struct ieee80211_hdr *hdr)
+{
+	__le16 control;
+
+	qdf_mem_copy(&control, (uint8_t *)hdr + OL_TXRX_RAW_CTL_COMMON_LEN,
+		     sizeof(control));
+
+	return le16_to_cpu(control);
+}
+
+static uint32_t ol_txrx_raw_min_len(struct ieee80211_hdr *hdr)
+{
+	__le16 fc = hdr->frame_control;
+	uint16_t control;
+	uint32_t tid_count;
+	uint32_t bitmap_len;
+	bool multi_tid;
+
+	if (!ieee80211_is_back_req(fc) && !ieee80211_is_back(fc))
+		return ieee80211_hdrlen(fc);
+
+	control = ol_txrx_raw_ctl_control(hdr);
+	multi_tid = control & IEEE80211_BAR_CTRL_MULTI_TID;
+	tid_count = multi_tid ? ol_txrx_raw_ba_tid_count(control) : 1;
+
+	if (ieee80211_is_back_req(fc)) {
+		if (!multi_tid)
+			return sizeof(struct ieee80211_bar);
+
+		return OL_TXRX_RAW_CTL_COMMON_LEN +
+		       OL_TXRX_RAW_CTL_CONTROL_LEN +
+		       tid_count * (OL_TXRX_RAW_BA_PER_TID_INFO_LEN +
+				    OL_TXRX_RAW_BA_START_SEQ_LEN);
+	}
+
+	bitmap_len = control & IEEE80211_BAR_CTRL_CBMTID_COMPRESSED_BA ?
+		     OL_TXRX_RAW_BA_COMPRESSED_BITMAP_LEN :
+		     OL_TXRX_RAW_BA_BASIC_BITMAP_LEN;
+
+	if (!multi_tid)
+		return OL_TXRX_RAW_CTL_COMMON_LEN +
+		       OL_TXRX_RAW_CTL_CONTROL_LEN +
+		       OL_TXRX_RAW_BA_START_SEQ_LEN + bitmap_len;
+
+	return OL_TXRX_RAW_CTL_COMMON_LEN + OL_TXRX_RAW_CTL_CONTROL_LEN +
+	       tid_count * (OL_TXRX_RAW_BA_PER_TID_INFO_LEN +
+			    OL_TXRX_RAW_BA_START_SEQ_LEN + bitmap_len);
+}
+
+static int ol_txrx_raw_frame_info(struct ieee80211_hdr *hdr, uint32_t len,
+				  uint8_t *ext_tid, uint8_t *frame_type)
+{
+	__le16 fc = hdr->frame_control;
+
+	if (ieee80211_is_back_req(fc) || ieee80211_is_back(fc)) {
+		if (len < OL_TXRX_RAW_CTL_COMMON_LEN +
+			  OL_TXRX_RAW_CTL_CONTROL_LEN)
+			return -EINVAL;
+	}
+
+	if (len < ol_txrx_raw_min_len(hdr))
+		return -EINVAL;
+
+	if (ieee80211_is_ctl(fc)) {
+		*ext_tid = HTT_TX_EXT_TID_NON_QOS_MCAST_BCAST;
+		*frame_type = htt_frm_type_ctrl;
+		return 0;
+	}
+
+	if (!ieee80211_is_data(fc))
+		return -EINVAL;
+
+	if (ieee80211_is_data_qos(fc)) {
+		*ext_tid = ieee80211_get_qos_ctl(hdr)[0] &
+			   IEEE80211_QOS_CTL_TID_MASK;
+		*frame_type = htt_frm_type_data;
+		return 0;
+	}
+
+	*ext_tid = is_multicast_ether_addr(hdr->addr1) ?
+		   HTT_TX_EXT_TID_NON_QOS_MCAST_BCAST : HTT_NON_QOS_TID;
+	*frame_type = htt_frm_type_data;
+
+	return 0;
+}
+
+int
+ol_txrx_raw_send_ext(struct cdp_soc_t *soc_hdl, uint8_t vdev_id,
+		     qdf_nbuf_t tx_frm, uint8_t use_6mbps,
+		     uint16_t chanfreq)
+{
+#ifdef CONFIG_HL_SUPPORT
+	return -EOPNOTSUPP;
+#else
+	struct ol_txrx_soc_t *soc = cdp_soc_t_to_ol_txrx_soc_t(soc_hdl);
+	ol_txrx_vdev_handle vdev = ol_txrx_get_vdev_from_soc_vdev_id(soc,
+								     vdev_id);
+	struct ieee80211_hdr *hdr;
+	struct ol_txrx_pdev_t *pdev;
+	struct ol_tx_desc_t *tx_desc;
+	struct ol_txrx_msdu_info_t tx_msdu_info;
+	uint32_t *word0;
+	uint8_t frame_type;
+	uint8_t ext_tid;
+	int ret;
+
+	if (!vdev || !vdev->pdev || !tx_frm)
+		return -EFAULT;
+
+	if (qdf_nbuf_len(tx_frm) < OL_TXRX_RAW_MIN_CTL_LEN)
+		return -EINVAL;
+
+	hdr = (struct ieee80211_hdr *)qdf_nbuf_data(tx_frm);
+	ret = ol_txrx_raw_frame_info(hdr, qdf_nbuf_len(tx_frm), &ext_tid,
+				     &frame_type);
+	if (ret)
+		return ret;
+
+	pdev = vdev->pdev;
+	qdf_mem_zero(&tx_msdu_info, sizeof(tx_msdu_info));
+	tx_msdu_info.htt.action.use_6mbps = use_6mbps;
+	tx_msdu_info.htt.action.do_encrypt = 0;
+	tx_msdu_info.htt.action.tx_comp_req = 0;
+	tx_msdu_info.htt.info.ext_tid = ext_tid;
+	tx_msdu_info.htt.info.vdev_id = vdev->vdev_id;
+	tx_msdu_info.htt.info.peer_id = HTT_INVALID_PEER_ID;
+	tx_msdu_info.htt.info.l2_hdr_type = htt_pkt_type_raw;
+	tx_msdu_info.htt.info.frame_type = frame_type;
+	tx_msdu_info.htt.info.is_unicast =
+		!is_multicast_ether_addr(hdr->addr1);
+
+	tx_desc = ol_tx_desc_ll(pdev, vdev, tx_frm, &tx_msdu_info);
+	if (!tx_desc)
+		return -EINVAL;
+
+	htt_tx_desc_set_chanfreq(tx_desc->htt_tx_desc, chanfreq);
+	htt_tx_desc_type(pdev->htt_pdev, tx_desc->htt_tx_desc,
+			 htt_pkt_type_raw,
+			 ol_txrx_tx_raw_subtype(OL_TX_SPEC_RAW |
+						OL_TX_SPEC_NO_AGGR |
+						OL_TX_SPEC_NO_ENCRYPT));
+	/*
+	 * ol_tx_desc_ll may flip do_encrypt back to 1 from the netbuf
+	 * exemption_type heuristic (ol_tx_desc.c:714); the raw inject path
+	 * never wants encryption, so force the NO_ENCRYPT bit directly on
+	 * word0 of the HTT descriptor as the final word-level write.
+	 */
+	word0 = (uint32_t *)tx_desc->htt_tx_desc;
+	HTT_TX_DESC_NO_ENCRYPT_SET(*word0, 1);
+
+	QDF_NBUF_CB_TX_PACKET_TRACK(tx_desc->netbuf) =
+		QDF_NBUF_TX_PKT_DATA_TRACK;
+	ol_tx_send_nonstd(pdev, tx_desc, tx_frm, htt_pkt_type_raw);
+
+	return 0;
+#endif
 }
