@@ -35,6 +35,7 @@
 #include "wlan_reg_ucfg_api.h"
 #include "wlan_hdd_p2p.h"
 #include <linux/ctype.h>
+#include <linux/net_tstamp.h>
 #include "wma.h"
 #include "wlan_hdd_napi.h"
 #include "wlan_mlme_ucfg_api.h"
@@ -8822,6 +8823,42 @@ static int __hdd_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 		else
 			ret = hdd_driver_ioctl(adapter, ifr);
 		break;
+	case SIOCSHWTSTAMP:
+	case SIOCGHWTSTAMP: {
+		/* WCN3990 firmware does not implement PTP hardware timestamping,
+		 * but wlan_get_ts_info() advertises SOF_TIMESTAMPING_*_HARDWARE
+		 * via ETHTOOL_GET_TS_INFO. libpcap consumers (e.g. the Mosey
+		 * monitor daemon) therefore issue SIOCSHWTSTAMP and log
+		 * "SIOCSHWTSTAMP failed" on every monitor open against the
+		 * default -EINVAL. Stub to report "no HW timestamping active"
+		 * (HWTSTAMP_TX_OFF/HWTSTAMP_FILTER_NONE) so callers fall back
+		 * to software (kernel netdev) timestamps cleanly. Functionally
+		 * equivalent — the data plane has no PHC support either way.
+		 *
+		 * Permission: SIOCSHWTSTAMP is gated on CAP_NET_ADMIN by
+		 * net/core/dev_ioctl.c before reaching ndo_do_ioctl;
+		 * SIOCGHWTSTAMP is unprivileged but returns only canned
+		 * constants, no kernel info disclosed.
+		 */
+		struct hwtstamp_config cfg = {0};
+
+		BUILD_BUG_ON(sizeof(struct hwtstamp_config) != 12);
+
+		if (cmd == SIOCSHWTSTAMP &&
+		    copy_from_user(&cfg, ifr->ifr_data, sizeof(cfg))) {
+			ret = -EFAULT;
+			break;
+		}
+		cfg.flags = 0;
+		cfg.tx_type = HWTSTAMP_TX_OFF;
+		cfg.rx_filter = HWTSTAMP_FILTER_NONE;
+		if (copy_to_user(ifr->ifr_data, &cfg, sizeof(cfg))) {
+			ret = -EFAULT;
+			break;
+		}
+		ret = 0;
+		break;
+	}
 	default:
 		hdd_warn("unknown ioctl %d", cmd);
 		ret = -EINVAL;
