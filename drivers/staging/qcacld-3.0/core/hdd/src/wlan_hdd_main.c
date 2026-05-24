@@ -8229,6 +8229,20 @@ int wlan_hdd_set_mon_chan(struct hdd_adapter *adapter, qdf_freq_t freq,
 	adapter->mon_chan_freq = freq;
 	adapter->mon_bandwidth = bandwidth;
 
+	/*
+	 * qdf_monitor_mode_vdev_up_event is only fired by SME from
+	 * hdd_sme_monitor_mode_callback on a fresh VDEV-up event. On the
+	 * concurrent path the monitor VDEV is already up (created at iface
+	 * add); sme_roam_channel_change_req returned success synchronously,
+	 * so there is nothing to wait for — skip the wait to avoid a
+	 * SME_CMD_VDEV_START_BSS_TIMEOUT on every channel hop.
+	 */
+	if (adapter->device_mode == QDF_MONITOR_MODE &&
+	    hdd_get_conparam() != QDF_GLOBAL_MONITOR_MODE) {
+		adapter->monitor_mode_vdev_up_in_progress = false;
+		return 0;
+	}
+
 	/* block on a completion variable until vdev up success*/
 	status = qdf_wait_for_event_completion(
 				       &adapter->qdf_monitor_mode_vdev_up_event,
