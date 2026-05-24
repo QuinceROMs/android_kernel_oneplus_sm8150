@@ -74,6 +74,9 @@
 #endif
 #include "wlan_mlme_ucfg_api.h"
 #include "cfg_ucfg_api.h"
+#ifdef WLAN_FEATURE_PKT_CAPTURE
+#include "wlan_pkt_capture_ucfg_api.h"
+#endif
 #include "wlan_cp_stats_mc_ucfg_api.h"
 #include <qdf_hang_event_notifier.h>
 #include <qdf_notifier.h>
@@ -3057,6 +3060,14 @@ int cds_smmu_map_unmap(bool map, uint32_t num_buf, qdf_mem_info_t *buf_arr)
 #endif
 
 #ifdef WLAN_FEATURE_PKT_CAPTURE
+/*
+ * Source the runtime state from the pkt_capture component psoc cfg, which
+ * gets populated from packet_capture_mode in WCNSS_qcom_cfg.ini at psoc
+ * create. hdd_ctx->enable_pkt_capture_support and ->val_pkt_capture_mode
+ * exist in the struct but are never assigned anywhere in this tree, so the
+ * old getters always reported "disabled" and the monitor-mode path used
+ * by mosey_server (ART_SET_CHAN) bailed out with -ENODEV.
+ */
 bool cds_is_pktcapture_enabled(void)
 {
 	struct hdd_context *hdd_ctx;
@@ -3067,7 +3078,8 @@ bool cds_is_pktcapture_enabled(void)
 		return false;
 	}
 
-	return hdd_ctx->enable_pkt_capture_support;
+	return ucfg_pkt_capture_get_mode(hdd_ctx->psoc) !=
+					 PACKET_CAPTURE_MODE_DISABLE;
 }
 
 uint8_t cds_get_pktcapture_mode(void)
@@ -3077,9 +3089,9 @@ uint8_t cds_get_pktcapture_mode(void)
 	hdd_ctx = gp_cds_context->hdd_context;
 	if (!hdd_ctx) {
 		cds_err("HDD context is NULL");
-		return false;
+		return 0;
 	}
 
-	return hdd_ctx->val_pkt_capture_mode;
+	return (uint8_t)ucfg_pkt_capture_get_mode(hdd_ctx->psoc);
 }
 #endif /* WLAN_FEATURE_PKT_CAPTURE */
