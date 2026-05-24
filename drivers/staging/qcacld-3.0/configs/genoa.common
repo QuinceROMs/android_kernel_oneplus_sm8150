@@ -42,7 +42,13 @@ CONFIG_WMI_CMD_STRINGS := y
 CONFIG_SOFTAP_CHANNEL_RANGE := y
 CONFIG_FEATURE_WLAN_SCAN_PNO := y
 CONFIG_WLAN_FEATURE_DSRC := n
-CONFIG_FEATURE_MONITOR_MODE_SUPPORT := n
+# Monitor mode + packet capture: required so the radiotap0 vif used by
+# mosey_server (Quick Share AirDrop) gets a backing adapter. Without
+# FEATURE_MONITOR_MODE_SUPPORT the cfg80211 add_iface(MONITOR) is rejected
+# and ART_SET_CHAN returns -ENODEV; without WLAN_FEATURE_PKT_CAPTURE the
+# packet_capture_mode entry in WCNSS_qcom_cfg.ini has no compiled backend.
+CONFIG_FEATURE_MONITOR_MODE_SUPPORT := y
+CONFIG_WLAN_FEATURE_PKT_CAPTURE := y
 CONFIG_DP_TRACE := y
 CONFIG_QCACLD_FEATURE_METERING := n
 
