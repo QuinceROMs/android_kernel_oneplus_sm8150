@@ -8139,7 +8139,14 @@ int wlan_hdd_set_mon_chan(struct hdd_adapter *adapter, qdf_freq_t freq,
 	enum phy_ch_width ch_width;
 	int ret;
 
-	if (hdd_get_conparam() != QDF_GLOBAL_MONITOR_MODE) {
+	/*
+	 * Accept either the legacy exclusive monitor-only mode or the
+	 * concurrent path used by mosey_server, where a per-adapter
+	 * QDF_MONITOR_MODE vdev (radiotap0) coexists with a regular
+	 * STA on wlan0 and the global conparam stays at MISSION_MODE.
+	 */
+	if (hdd_get_conparam() != QDF_GLOBAL_MONITOR_MODE &&
+	    adapter->device_mode != QDF_MONITOR_MODE) {
 		hdd_err("Not supported, device is not in monitor mode");
 		return -EINVAL;
 	}
