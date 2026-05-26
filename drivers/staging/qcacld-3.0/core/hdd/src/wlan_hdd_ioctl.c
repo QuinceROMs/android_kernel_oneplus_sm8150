@@ -8087,6 +8087,9 @@ static int drv_cmd_art_get_if_addr(struct hdd_adapter *adapter,
 	len = scnprintf(buf, sizeof(buf), QDF_FULL_MAC_FMT "\n",
 			QDF_FULL_MAC_REF(mon_adapter->mac_addr.bytes));
 
+	hdd_info("ART_GET_IF_ADDR: returning " QDF_FULL_MAC_FMT,
+		 QDF_FULL_MAC_REF(mon_adapter->mac_addr.bytes));
+
 	return hdd_art_copy_response(priv_data, buf, len);
 }
 
@@ -8174,6 +8177,9 @@ static int drv_cmd_art_set_chan(struct hdd_adapter *adapter,
 	hdd_art_set_channel(adapter, freq, ch_width);
 	hdd_art_set_channel(mon_adapter, freq, ch_width);
 
+	hdd_info("ART_SET_CHAN: chan=%u %s bw=%u freq=%u ch_width=%d",
+		 channel, band, bw, freq, ch_width);
+
 	return 0;
 }
 
@@ -8238,6 +8244,10 @@ static int drv_cmd_art_bssid(struct hdd_adapter *adapter,
 	hdd_art_set_bssid(adapter, &bssid);
 	if (mon_adapter)
 		hdd_art_set_bssid(mon_adapter, &bssid);
+
+	hdd_info("ART_BSSID: " QDF_FULL_MAC_FMT " (mon=%s)",
+		 QDF_FULL_MAC_REF(bssid.bytes),
+		 mon_adapter ? "yes" : "no");
 
 	return 0;
 }
@@ -8393,6 +8403,9 @@ static int drv_cmd_art_tx_rate(struct hdd_adapter *adapter,
 		adapter->art_tx_nss = nss - 1;
 		adapter->art_tx_rate_configured = true;
 	}
+
+	hdd_info("ART_TX_RATE: %s mcs=%u nss=%u rate=%u flags=%d (ret=%d)",
+		 format, mcs, nss, rate, flags, ret);
 
 	return ret;
 }
