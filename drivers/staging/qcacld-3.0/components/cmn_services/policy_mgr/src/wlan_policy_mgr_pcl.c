@@ -851,6 +851,11 @@ QDF_STATUS policy_mgr_get_pcl(struct wlan_objmgr_psoc *psoc,
 		break;
 	}
 
+	if (mode == PM_NAN_DISC_MODE || mode == PM_NDI_MODE)
+		policy_mgr_info("get_pcl(%s): num_conn=%u pcl=%d",
+				mode == PM_NAN_DISC_MODE ? "NAN_DISC" : "NDI",
+				num_connections, pcl);
+
 	/* once the PCL enum is obtained find out the exact channel list with
 	 * help from sme_get_cfg_valid_channels
 	 */
@@ -860,6 +865,11 @@ QDF_STATUS policy_mgr_get_pcl(struct wlan_objmgr_psoc *psoc,
 		policy_mgr_err("failed to get channel list:%d", status);
 		return status;
 	}
+
+	if (mode == PM_NAN_DISC_MODE || mode == PM_NDI_MODE)
+		policy_mgr_info("get_pcl(%s): channel_list len=%u",
+				mode == PM_NAN_DISC_MODE ? "NAN_DISC" : "NDI",
+				*len);
 
 	policy_mgr_dump_channel_list(*len, pcl_channels, pcl_weight);
 
