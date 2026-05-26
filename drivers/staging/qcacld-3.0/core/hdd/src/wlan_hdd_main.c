@@ -2995,9 +2995,14 @@ static netdev_tx_t hdd_mon_start_xmit(struct sk_buff *skb,
 							   tx_adapter->vdev_id,
 							   skb, use_6mbps,
 							   chanfreq);
-	if (ret)
+	if (ret) {
+		hdd_debug_rl("MON_TX drop at DP: mgmt=%d freq=%u len=%u ret=%d",
+			     is_mgmt, chanfreq, tx_len, ret);
 		goto drop;
+	}
 
+	hdd_debug("MON_TX ok: mgmt=%d freq=%u 6mbps=%d len=%u",
+		  is_mgmt, chanfreq, use_6mbps, tx_len);
 	adapter->stats.tx_packets++;
 	adapter->stats.tx_bytes += tx_len;
 	return NETDEV_TX_OK;
@@ -8256,6 +8261,8 @@ int wlan_hdd_set_mon_chan(struct hdd_adapter *adapter, qdf_freq_t freq,
 	if (adapter->device_mode == QDF_MONITOR_MODE &&
 	    hdd_get_conparam() != QDF_GLOBAL_MONITOR_MODE) {
 		adapter->monitor_mode_vdev_up_in_progress = false;
+		hdd_info("set_mon_chan ok (concurrent): freq=%u bw=%u",
+			 freq, bandwidth);
 		return 0;
 	}
 
@@ -8279,6 +8286,9 @@ int wlan_hdd_set_mon_chan(struct hdd_adapter *adapter, qdf_freq_t freq,
 				  status);
 
 		adapter->monitor_mode_vdev_up_in_progress = false;
+	} else {
+		hdd_info("set_mon_chan ok (exclusive): freq=%u bw=%u",
+			 freq, bandwidth);
 	}
 
 	return qdf_status_to_os_return(status);
