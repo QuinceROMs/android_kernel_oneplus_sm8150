@@ -380,6 +380,10 @@ ol_txrx_raw_send_ext(struct cdp_soc_t *soc_hdl, uint8_t vdev_id,
 	if (qdf_nbuf_len(tx_frm) < OL_TXRX_RAW_MIN_CTL_LEN)
 		return -EINVAL;
 
+	QDF_TRACE(QDF_MODULE_ID_TXRX, QDF_TRACE_LEVEL_DEBUG,
+		  "raw_send_ext: vdev_id=%u 6mbps=%u chanfreq=%u len=%zu",
+		  vdev_id, use_6mbps, chanfreq, qdf_nbuf_len(tx_frm));
+
 	hdr = (struct ieee80211_hdr *)qdf_nbuf_data(tx_frm);
 	ret = ol_txrx_raw_frame_info(hdr, qdf_nbuf_len(tx_frm), &ext_tid,
 				     &frame_type);
@@ -421,6 +425,10 @@ ol_txrx_raw_send_ext(struct cdp_soc_t *soc_hdl, uint8_t vdev_id,
 	QDF_NBUF_CB_TX_PACKET_TRACK(tx_desc->netbuf) =
 		QDF_NBUF_TX_PKT_DATA_TRACK;
 	ol_tx_send_nonstd(pdev, tx_desc, tx_frm, htt_pkt_type_raw);
+
+	QDF_TRACE(QDF_MODULE_ID_TXRX, QDF_TRACE_LEVEL_DEBUG,
+		  "raw_send_ext: handed off to firmware (vdev_id=%u)",
+		  vdev_id);
 
 	return 0;
 #endif
