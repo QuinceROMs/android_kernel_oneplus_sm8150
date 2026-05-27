@@ -8336,6 +8336,29 @@ static int hdd_art_send_rate_update(struct hdd_adapter *adapter,
 	rate_update.mcastDataRate5GHzTxFlag = flags;
 	qdf_copy_macaddr(&rate_update.bssid, &adapter->mac_addr);
 
+	hdd_info("art_rate_update: bssid=" QDF_MAC_ADDR_FMT
+		 " adapter=" QDF_MAC_ADDR_FMT " vdev_id=%u",
+		 QDF_MAC_ADDR_REF(rate_update.bssid.bytes),
+		 QDF_MAC_ADDR_REF(adapter->mac_addr.bytes),
+		 adapter->vdev_id);
+	{
+		uint8_t i;
+		for (i = 0; i < WLAN_UMAC_PSOC_MAX_VDEVS; i++) {
+			struct wlan_objmgr_vdev *v =
+				wlan_objmgr_get_vdev_by_id_from_psoc(
+					hdd_ctx->psoc, i, WLAN_OSIF_ID);
+			if (!v)
+				continue;
+			hdd_info("art_rate_update: objmgr vdev[%u] mac=" QDF_MAC_ADDR_FMT
+				 " opmode=%d up=%d",
+				 i,
+				 QDF_MAC_ADDR_REF(wlan_vdev_mlme_get_macaddr(v)),
+				 wlan_vdev_mlme_get_opmode(v),
+				 wlan_vdev_is_up(v));
+			wlan_objmgr_vdev_release_ref(v, WLAN_OSIF_ID);
+		}
+	}
+
 	status = sme_send_rate_update_ind(hdd_ctx->mac_handle, &rate_update);
 	if (QDF_IS_STATUS_ERROR(status)) {
 		hdd_err("ART_TX_RATE failed for %s(%d), status=%d",

@@ -130,12 +130,16 @@ int hdd_enable_monitor_mode(struct net_device *dev)
 {
 	void *soc = cds_get_context(QDF_MODULE_ID_SOC);
 	uint8_t vdev_id;
+	int ret;
 
 	hdd_enter_dev(dev);
 
 	vdev_id = cdp_get_mon_vdev_from_pdev(soc, OL_TXRX_PDEV_ID);
+	hdd_info("enable_monitor: cdp_get_mon_vdev_from_pdev vdev_id=%u", vdev_id);
 	if (vdev_id < 0)
 		return -EINVAL;
 
-	return cdp_set_monitor_mode(soc, vdev_id, false);
+	ret = cdp_set_monitor_mode(soc, vdev_id, false);
+	hdd_info("enable_monitor: cdp_set_monitor_mode ret=%d", ret);
+	return ret;
 }

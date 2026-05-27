@@ -24118,6 +24118,13 @@ int wlan_hdd_change_hw_mode_for_given_chnl(struct hdd_adapter *adapter,
 	status = policy_mgr_current_connections_update(
 			hdd_ctx->psoc, adapter->vdev_id,
 			chan_freq, reason);
+	hdd_info("change_hw_mode: policy_mgr update status=%d vdev=%u freq=%u reason=%d",
+		 status, adapter->vdev_id, chan_freq, reason);
+	if (adapter->device_mode == QDF_MONITOR_MODE &&
+	    hdd_get_conparam() != QDF_GLOBAL_MONITOR_MODE &&
+	    status == QDF_STATUS_E_NOSUPPORT)
+		hdd_warn("concurrent monitor: no HW mode support for freq %u (single-radio)",
+			 chan_freq);
 	switch (status) {
 	case QDF_STATUS_E_FAILURE:
 		/*

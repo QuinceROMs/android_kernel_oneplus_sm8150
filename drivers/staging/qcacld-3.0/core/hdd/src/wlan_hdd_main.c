@@ -2698,6 +2698,19 @@ static int __hdd_mon_open(struct net_device *dev)
 	if (ret)
 		return ret;
 
+	hdd_info("mon_open: dev=%s dev_addr=" QDF_MAC_ADDR_FMT
+		 " adapter=" QDF_MAC_ADDR_FMT
+		 " device_mode=%d conparam=%d vdev_id=%u vdev=%pK"
+		 " pkt_capture_mode=%u path=%s",
+		 dev->name,
+		 QDF_MAC_ADDR_REF(dev->dev_addr),
+		 QDF_MAC_ADDR_REF(adapter->mac_addr.bytes),
+		 adapter->device_mode, hdd_get_conparam(),
+		 adapter->vdev_id, adapter->vdev,
+		 cds_get_pktcapture_mode(),
+		 (con_mode == QDF_GLOBAL_MONITOR_MODE) ?
+		 "exclusive" : "concurrent-CDP");
+
 	hdd_mon_mode_ether_setup(dev);
 
 	if (con_mode == QDF_GLOBAL_MONITOR_MODE) {
@@ -2721,9 +2734,15 @@ static int __hdd_mon_open(struct net_device *dev)
 	}
 
 	ret = hdd_set_mon_rx_cb(dev);
+	hdd_info("mon_open: set_mon_rx_cb ret=%d", ret);
 
 	if (!ret)
 		ret = hdd_enable_monitor_mode(dev);
+
+	hdd_info("mon_open: enable_monitor_mode ret=%d sme_opened=%d iface_opened=%d",
+		 ret,
+		 test_bit(SME_SESSION_OPENED, &adapter->event_flags) ? 1 : 0,
+		 test_bit(DEVICE_IFACE_OPENED, &adapter->event_flags) ? 1 : 0);
 
 	if (!ret) {
 		set_bit(DEVICE_IFACE_OPENED, &adapter->event_flags);
@@ -8237,9 +8256,14 @@ int wlan_hdd_set_mon_chan(struct hdd_adapter *adapter, qdf_freq_t freq,
 	}
 	adapter->monitor_mode_vdev_up_in_progress = true;
 
+	hdd_info("set_mon_chan: sending SME bssid=" QDF_MAC_ADDR_FMT
+		 " vdev_id=%u opmode=%d",
+		 QDF_MAC_ADDR_REF(bssid.bytes), adapter->vdev_id,
+		 adapter->vdev ? wlan_vdev_mlme_get_opmode(adapter->vdev) : -1);
 	status = sme_roam_channel_change_req(hdd_ctx->mac_handle,
 					     bssid, &roam_profile.ch_params,
 					     &roam_profile);
+	hdd_info("set_mon_chan: sme_roam_channel_change_req status=%d", status);
 	if (status) {
 		hdd_err("Status: %d Failed to set sme_roam Channel for monitor mode",
 			status);

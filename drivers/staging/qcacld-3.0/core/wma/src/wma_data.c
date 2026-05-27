@@ -1263,6 +1263,20 @@ QDF_STATUS wma_process_rate_update_indicate(tp_wma_handle wma,
 	/* Get the vdev id */
 	if (wma_find_vdev_id_by_addr(wma, pRateUpdateParams->bssid.bytes,
 				     &vdev_id)) {
+		uint8_t i;
+		WMA_LOGI("rate_update lookup failed for bssid="QDF_MAC_ADDR_FMT
+			 ", dumping active wma->interfaces:",
+			 QDF_MAC_ADDR_REF(pRateUpdateParams->bssid.bytes));
+		for (i = 0; i < wma->max_bssid; i++) {
+			struct wlan_objmgr_vdev *v = wma->interfaces[i].vdev;
+
+			if (!v)
+				continue;
+			WMA_LOGI("  intf[%u]: mac="QDF_MAC_ADDR_FMT" opmode=%d",
+				 i,
+				 QDF_MAC_ADDR_REF(wlan_vdev_mlme_get_macaddr(v)),
+				 wlan_vdev_mlme_get_opmode(v));
+		}
 		WMA_LOGE("vdev handle is invalid for "QDF_MAC_ADDR_FMT,
 			 QDF_MAC_ADDR_REF(pRateUpdateParams->bssid.bytes));
 		qdf_mem_free(pRateUpdateParams);
