@@ -1066,6 +1066,8 @@ key_ref_t find_key_to_update(key_ref_t keyring_ref,
 	struct key *keyring, *key;
 	const void *object;
 
+	guard(rcu)();
+
 	keyring = key_ref_to_ptr(keyring_ref);
 
 	kenter("{%d},{%s,%s}",

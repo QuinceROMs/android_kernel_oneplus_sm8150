@@ -38,6 +38,7 @@
 #include <linux/atomic.h>
 #include <linux/irqflags.h>
 #include <linux/preempt.h>
+#include <linux/cleanup.h>
 #include <linux/bottom_half.h>
 #include <linux/lockdep.h>
 #include <asm/processor.h>
@@ -942,5 +943,7 @@ static inline notrace void rcu_read_unlock_sched_notrace(void)
 #define smp_mb__after_unlock_lock()	do { } while (0)
 #endif /* #else #ifdef CONFIG_ARCH_WEAK_RELEASE_ACQUIRE */
 
+
+DEFINE_LOCK_GUARD_0(rcu, rcu_read_lock(), rcu_read_unlock())
 
 #endif /* __LINUX_RCUPDATE_H */
