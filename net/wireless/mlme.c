@@ -576,6 +576,12 @@ void cfg80211_mlme_purge_registrations(struct wireless_dev *wdev)
 	cfg80211_process_mlme_unregistrations(rdev);
 }
 
+static bool cfg80211_is_vendor_action(u8 category)
+{
+	return category == WLAN_CATEGORY_VENDOR_SPECIFIC ||
+	       category == WLAN_CATEGORY_VENDOR_SPECIFIC_PROTECTED;
+}
+
 int cfg80211_mlme_mgmt_tx(struct cfg80211_registered_device *rdev,
 			  struct wireless_dev *wdev,
 			  struct cfg80211_mgmt_tx_params *params, u64 *cookie)
@@ -611,6 +617,13 @@ int cfg80211_mlme_mgmt_tx(struct cfg80211_registered_device *rdev,
 		case NL80211_IFTYPE_ADHOC:
 		case NL80211_IFTYPE_STATION:
 		case NL80211_IFTYPE_P2P_CLIENT:
+			/*
+			 * AWDL vendor-specific action bypasses the
+			 * AP-association checks so it can be sent
+			 * broadcast and off-channel.
+			 */
+			if (cfg80211_is_vendor_action(mgmt->u.action.category))
+				break;
 			if (!wdev->current_bss) {
 				err = -ENOTCONN;
 				break;
@@ -653,6 +666,9 @@ int cfg80211_mlme_mgmt_tx(struct cfg80211_registered_device *rdev,
 			 */
 			break;
 		case NL80211_IFTYPE_P2P_DEVICE:
+			/* AWDL: allow vendor-specific action (else public-only). */
+			if (cfg80211_is_vendor_action(mgmt->u.action.category))
+				break;
 			/*
 			 * fall through, P2P device only supports
 			 * public action frames
