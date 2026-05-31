@@ -53,11 +53,6 @@ static void tcf_action_goto_chain_exec(const struct tc_action *a,
 	res->goto_tp = rcu_dereference_bh(chain->filter_chain);
 }
 
-/* XXX: For standalone actions, we don't need a RCU grace period either, because
- * actions are always connected to filters and filters are already destroyed in
- * RCU callbacks, so after a RCU grace period actions are already disconnected
- * from filters. Readers later can not find us.
- */
 static void free_tcf(struct tc_action *p)
 {
 	free_percpu(p->cpu_bstats);
@@ -70,7 +65,7 @@ static void free_tcf(struct tc_action *p)
 	if (p->goto_chain)
 		tcf_action_goto_chain_fini(p);
 
-	kfree(p);
+	kfree_rcu(p, tcfa_rcu);
 }
 
 static void tcf_idr_remove(struct tcf_idrinfo *idrinfo, struct tc_action *p)
