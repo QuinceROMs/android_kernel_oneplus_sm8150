@@ -1407,8 +1407,27 @@ struct page *f2fs_get_node_page_ra(struct page *parent, int start)
 {
 	struct f2fs_sb_info *sbi = F2FS_P_SB(parent);
 	nid_t nid = get_nid(parent, start, false);
+	struct page *page;
 
-	return __get_node_page(sbi, nid, parent, start);
+	page = __get_node_page(sbi, nid, parent, start);
+	if (IS_ERR(page))
+		return page;
+
+	/*
+	 * node in chain should not be an inode or xattr node, otherwise
+	 * it means node chain in inode mapping table is corrupted.
+	 */
+	if (IS_INODE(page) || f2fs_has_xattr_block(ofs_of_node(page))) {
+		f2fs_warn(sbi, "inconsistent node block, nid:%u, node_footer[nid:%u,ino:%u,ofs:%u,cpver:%llu,blkaddr:%u]",
+			  nid, nid_of_node(page), ino_of_node(page),
+			  ofs_of_node(page), cpver_of_node(page),
+			  next_blkaddr_of_node(page));
+		ClearPageUptodate(page);
+		f2fs_put_page(page, 1);
+		return ERR_PTR(-EFSCORRUPTED);
+	}
+
+	return page;
 }
 
 static void flush_inline_data(struct f2fs_sb_info *sbi, nid_t ino)
