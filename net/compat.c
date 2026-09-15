@@ -360,8 +360,11 @@ int compat_sock_get_timestamp(struct sock *sk, struct timeval __user *userstamp)
 
 	ctv = (struct compat_timeval __user *) userstamp;
 	err = -ENOENT;
-	if (!sock_flag(sk, SOCK_TIMESTAMP))
+	if (!sock_flag(sk, SOCK_TIMESTAMP)) {
+		lock_sock(sk);
 		sock_enable_timestamp(sk, SOCK_TIMESTAMP);
+		release_sock(sk);
+	}
 	tv = ktime_to_timeval(sock_read_timestamp(sk));
 
 	if (tv.tv_sec == -1)
@@ -390,8 +393,11 @@ int compat_sock_get_timestampns(struct sock *sk, struct timespec __user *usersta
 
 	ctv = (struct compat_timespec __user *) userstamp;
 	err = -ENOENT;
-	if (!sock_flag(sk, SOCK_TIMESTAMP))
+	if (!sock_flag(sk, SOCK_TIMESTAMP)) {
+		lock_sock(sk);
 		sock_enable_timestamp(sk, SOCK_TIMESTAMP);
+		release_sock(sk);
+	}
 	ts = ktime_to_timespec(sock_read_timestamp(sk));
 	if (ts.tv_sec == -1)
 		return err;
