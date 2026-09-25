@@ -6,7 +6,7 @@
 #include <linux/lockdep.h>
 #include <linux/slab.h>
 #include <linux/string.h>
-#include "feature/selinux_hide.c"
+#include "feature/selinux_hide.h"
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 13, 0)
 #include <uapi/linux/sched/types.h>
 #elif LINUX_VERSION_CODE >= KERNEL_VERSION(4, 12, 0)
@@ -619,7 +619,7 @@ int handle_sepolicy(void __user *user_data, u64 data_len)
 			pr_err("sepol: cmd #%u failed, cmd=%u subcmd=%u.\n", cmd_index, header.cmd, header.subcmd);
 		} else {
 			success_cmd_count++;
-            ksu_add_shit_to_list(header.cmd, args);
+            ksu_add_probe_to_list(header.cmd, args);
 		}
 		cmd_index++;
 	}
@@ -696,7 +696,7 @@ static int handle_sepolicy_fn(void *data)
 			pr_err("sepol: cmd #%u failed, cmd=%u subcmd=%u.\n", cmd_index, header.cmd, header.subcmd);
 		else {
 			success_cmd_count++;
-            ksu_add_shit_to_list(header.cmd, args);
+            ksu_add_probe_to_list(header.cmd, args);
 		}
 
 		cmd_index++;

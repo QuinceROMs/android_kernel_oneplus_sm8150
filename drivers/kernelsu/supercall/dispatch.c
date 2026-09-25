@@ -10,6 +10,13 @@
 #include "objsec.h"
 #endif // #ifdef CONFIG_KSU_SUSFS
 #include <linux/thread_info.h>
+#include <linux/sched.h>
+#if __has_include(<linux/sched/task.h>)
+#include <linux/sched/task.h>
+#endif
+#if __has_include(<linux/sched/signal.h>)
+#include <linux/sched/signal.h>
+#endif
 #include "uapi/supercall.h"
 #include "supercall/internal.h"
 #include "arch.h" // IWYU pragma: keep
@@ -57,6 +64,9 @@ static int do_get_info(void __user *arg)
 	
 #ifdef MODULE
 	cmd.flags |= KSU_GET_INFO_FLAG_LKM;
+    if (ksu_bundled) {
+        cmd.flags |= KSU_GET_INFO_FLAG_BUNDLED;
+    }
 #endif
 
 	if (is_manager()) {
@@ -73,9 +83,6 @@ static int do_get_info(void __user *arg)
     if (ksu_late_loaded) {
         cmd.flags |= KSU_GET_INFO_FLAG_LATE_LOAD;
     }
-#ifdef EXPECTED_SIZE2
-    cmd.flags |= KSU_GET_INFO_FLAG_PR_BUILD;
-#endif
     cmd.features = KSU_FEATURE_MAX;
     cmd.uapi_version = KERNEL_SU_UAPI_VERSION;
 
@@ -93,29 +100,30 @@ static int do_get_info_legacy(void __user *arg)
 
 #ifdef MODULE
     cmd.flags |= KSU_GET_INFO_FLAG_LKM;
+    if (ksu_bundled) {
+        cmd.flags |= KSU_GET_INFO_FLAG_BUNDLED;
+    }
 #endif
 
-    if (is_manager()) {
-        cmd.flags |= KSU_GET_INFO_FLAG_MANAGER;
-    }
-    if (ksu_late_loaded) {
-        cmd.flags |= KSU_GET_INFO_FLAG_LATE_LOAD;
-    }
-#ifdef EXPECTED_SIZE2
-    cmd.flags |= KSU_GET_INFO_FLAG_PR_BUILD;
-#endif
-    cmd.features = KSU_FEATURE_MAX;
-    
-    if (copy_to_user(arg, &cmd, sizeof(cmd))) {
-        pr_err("get_version: copy_to_user failed\n");
-        return -EFAULT;
-    }
+	if (is_manager()) {
+		cmd.flags |= KSU_GET_INFO_FLAG_MANAGER;
+	}
+	if (ksu_late_loaded) {
+		cmd.flags |= KSU_GET_INFO_FLAG_LATE_LOAD;
+	}
+	cmd.features = KSU_FEATURE_MAX;
+
+	if (copy_to_user(arg, &cmd, sizeof(cmd))) {
+		pr_err("get_version: copy_to_user failed\n");
+		return -EFAULT;
+	}
 
     return 0;
 }
 
 static int do_report_event(void __user *arg)
 {
+	static bool services_started = false;
 	struct ksu_report_event_cmd cmd;
 
 	if (copy_from_user(&cmd, arg, sizeof(cmd))) {
@@ -125,6 +133,9 @@ static int do_report_event(void __user *arg)
 	switch (cmd.event) {
 	case EVENT_POST_FS_DATA: {
 		static bool post_fs_data_lock = false;
+
+		// Reset for emulated soft reboot
+		services_started = false;
 		if (!post_fs_data_lock) {
 			post_fs_data_lock = true;
 			if (ksu_late_loaded) {
@@ -156,6 +167,15 @@ static int do_report_event(void __user *arg)
 		pr_info("module mounted!\n");
 		on_module_mounted();
 		break;
+	}
+	case EVENT_SERVICES: {
+		if (services_started) {
+			pr_info("services already started, skipping\n");
+			return 0;
+		}
+		services_started = true;
+		pr_info("services triggered\n");
+		return 1;
 	}
 	default:
 		break;
@@ -799,8 +819,9 @@ static int do_set_init_pgrp(void __user *arg)
 #endif
 
 	write_lock_irq(&tasklist_lock);
-	
+
 	p = current->group_leader;
+#ifdef KSU_COMPAT_HAS_TASK_PGRP_FUNC
 	init_group = task_pgrp(&init_task);
 
 	if (task_session(p) != task_session(&init_task))
@@ -808,6 +829,15 @@ static int do_set_init_pgrp(void __user *arg)
 
 	err = 0;
 	if (task_pgrp(p) != init_group) {
+#else
+	init_group = init_task.signal->pids[PIDTYPE_PGID];
+
+	if (p->signal->pids[PIDTYPE_SID] != init_task.signal->pids[PIDTYPE_SID])
+		goto out;
+
+	err = 0;
+	if (p->signal->pids[PIDTYPE_PGID] != init_group) {
+#endif
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 15, 0)
         change_pid(pids, p, PIDTYPE_PGID, init_group);
 #else
@@ -956,7 +986,8 @@ static const struct ksu_ioctl_cmd_map ksu_ioctl_handlers[] = {
         .cmd = KSU_IOCTL_GET_WRAPPER_FD,
         .name = "GET_WRAPPER_FD",
         .handler = do_get_wrapper_fd,
-        .perm_check = manager_or_root
+        .perm_check = manager_or_root,
+        .allow_su_session = true
     },
     {
         .cmd = KSU_IOCTL_MANAGE_MARK,
@@ -986,7 +1017,8 @@ static const struct ksu_ioctl_cmd_map ksu_ioctl_handlers[] = {
         .cmd = KSU_IOCTL_DISABLE_ESCAPE_TO_ROOT, 
         .name = "DISABLE_ESCAPE_TO_ROOT", 
         .handler = do_disable_escape_to_root, 
-        .perm_check = only_root 
+        .perm_check = only_root,
+        .allow_su_session = true
     },
     {
         .cmd = KSU_IOCTL_GET_SULOG_FD,
@@ -1015,7 +1047,7 @@ static const struct ksu_ioctl_cmd_map ksu_ioctl_handlers[] = {
 };
 // clang-format on
 
-long ksu_supercall_handle_ioctl(unsigned int cmd, void __user *argp)
+long ksu_supercall_handle_ioctl(const struct file *filp, unsigned int cmd, void __user *argp)
 {
 	int i;
 
@@ -1026,8 +1058,8 @@ long ksu_supercall_handle_ioctl(unsigned int cmd, void __user *argp)
 	for (i = 0; ksu_ioctl_handlers[i].handler; i++) {
 		if (cmd == ksu_ioctl_handlers[i].cmd) {
 			// Check permission first
-			if (ksu_ioctl_handlers[i].perm_check &&
-			    !ksu_ioctl_handlers[i].perm_check()) {
+			if (ksu_ioctl_handlers[i].perm_check && !ksu_ioctl_handlers[i].perm_check() &&
+                !(ksu_ioctl_handlers[i].allow_su_session && ksu_is_su_session_fd(filp))) {
 				pr_warn("ksu ioctl: permission denied for cmd=0x%x uid=%d\n",
 					cmd, current_uid().val);
 				return -EPERM;
