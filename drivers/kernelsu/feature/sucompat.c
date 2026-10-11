@@ -206,7 +206,7 @@ static long ksu_handle_execve_sucompat_common(const char __user **filename_user,
 	ret = escape_with_root_profile();
 	if (ret) {
 		pr_err("escape_with_root_profile failed: %ld\n", ret);
-		ksu_sulog_emit(pending_sucompat, NULL, NULL, GFP_KERNEL);
+		ksu_sulog_emit_pending(pending_sucompat, ret, GFP_KERNEL);
 		goto do_orig_execve;
 	}
 	if (preempt_count() > 0) {
