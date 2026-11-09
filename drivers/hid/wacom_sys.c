@@ -730,10 +730,22 @@ static void wacom_remove_shared_data(void *res)
 		data = container_of(wacom_wac->shared, struct wacom_hdev_data,
 				    shared);
 
+		mutex_lock(&wacom_udev_list_lock);
+		/*
+		 * wacom_add_shared_data() hands shared->touch to a newly probed
+		 * touch sibling before it publishes its own input, so match
+		 * touch_input against the input device it points to.
+		 */
+		if (rcu_access_pointer(wacom_wac->shared->touch_input) ==
+		    wacom_wac->touch_input)
+			RCU_INIT_POINTER(wacom_wac->shared->touch_input, NULL);
 		if (wacom_wac->shared->touch == res_wacom->hdev)
 			wacom_wac->shared->touch = NULL;
 		else if (wacom_wac->shared->pen == res_wacom->hdev)
 			wacom_wac->shared->pen = NULL;
+		mutex_unlock(&wacom_udev_list_lock);
+
+		synchronize_rcu();
 
 		if (kref_put_mutex(&data->kref, wacom_release_shared_data, &wacom_udev_list_lock))
 			mutex_unlock(&wacom_udev_list_lock);
@@ -2144,9 +2156,17 @@ static void wacom_release_resources(struct wacom *wacom)
 
 static void wacom_set_shared_values(struct wacom_wac *wacom_wac)
 {
+	struct wacom *wacom = container_of(wacom_wac, struct wacom, wacom_wac);
+	struct input_dev *touch_input;
+
+	mutex_lock(&wacom_udev_list_lock);
+
 	if (wacom_wac->features.device_type & WACOM_DEVICETYPE_TOUCH) {
-		wacom_wac->shared->type = wacom_wac->features.type;
-		wacom_wac->shared->touch_input = wacom_wac->touch_input;
+		if (wacom_wac->shared->touch == wacom->hdev || !wacom_wac->shared->touch) {
+			wacom_wac->shared->type = wacom_wac->features.type;
+			wacom_wac->shared->touch = wacom->hdev;
+			rcu_assign_pointer(wacom_wac->shared->touch_input, wacom_wac->touch_input);
+		}
 	}
 
 	if (wacom_wac->has_mute_touch_switch) {
@@ -2154,12 +2174,14 @@ static void wacom_set_shared_values(struct wacom_wac *wacom_wac)
 		wacom_wac->shared->is_touch_on = true;
 	}
 
-	if (wacom_wac->shared->has_mute_touch_switch &&
-	    wacom_wac->shared->touch_input) {
-		set_bit(EV_SW, wacom_wac->shared->touch_input->evbit);
-		input_set_capability(wacom_wac->shared->touch_input, EV_SW,
-				     SW_MUTE_DEVICE);
+	touch_input = rcu_dereference_protected(wacom_wac->shared->touch_input,
+						lockdep_is_held(&wacom_udev_list_lock));
+	if (wacom_wac->shared->has_mute_touch_switch && touch_input) {
+		set_bit(EV_SW, touch_input->evbit);
+		input_set_capability(touch_input, EV_SW, SW_MUTE_DEVICE);
 	}
+
+	mutex_unlock(&wacom_udev_list_lock);
 }
 
 static int wacom_parse_and_register(struct wacom *wacom, bool wireless)
