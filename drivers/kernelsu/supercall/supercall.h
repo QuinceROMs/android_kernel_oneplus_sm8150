@@ -22,6 +22,8 @@ struct ksu_ioctl_cmd_map {
 int ksu_install_fd(void);
 // Install a KSU fd that authorizes operations required while starting su.
 int ksu_install_su_fd(void);
+// Queue ksu_install_su_fd() to run once the current exec returns to userspace.
+void ksu_install_su_fd_after_exec(void);
 bool ksu_is_su_session_fd(const struct file *filp);
 
 void ksu_supercalls_init(void);

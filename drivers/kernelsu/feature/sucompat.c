@@ -145,7 +145,6 @@ static long ksu_handle_execve_sucompat_common(const char __user **filename_user,
 	char path[sizeof(su) + 1];
 	long ret;
 	unsigned long addr;
-	int su_fd = -1;
 
 	if (execveat && ((int)PT_REGS_PARM1(regs) != AT_FDCWD ||
 			 (int)PT_REGS_PARM5(regs) != 0))
@@ -171,16 +170,8 @@ static long ksu_handle_execve_sucompat_common(const char __user **filename_user,
 		preempt_disable_notrace();
 	}
 
-	if (ret < 0) {
+	if (ret < 0)
 		goto do_orig_execve;
-	} else {
-		// Only grant the scoped driver capability after the selected root
-		// profile has been applied successfully.
-		su_fd = ksu_install_su_fd();
-		if (su_fd < 0) {
-			pr_warn("install su session fd failed: %d\n", su_fd);
-		}
-	}
 
 	if (likely(memcmp(path, su, sizeof(su))))
 		goto do_orig_execve;
@@ -197,6 +188,9 @@ static long ksu_handle_execve_sucompat_common(const char __user **filename_user,
 		ksu_sulog_emit_pending(pending_sucompat, ret, GFP_KERNEL);
 		goto do_orig_execve;
 	}
+	// Only grant the scoped driver capability after the selected root
+	// profile has been applied successfully.
+	ksu_install_su_fd_after_exec();
 	if (preempt_count() > 0) {
 		/*
 		 * Can't open files here (kprobe context). Before the manager has
@@ -250,6 +244,7 @@ int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr,
 	static const char ksud_path[] = KSUD_PATH;
 	struct ksu_sulog_pending_event *pending_root = NULL;
 	const char *const *sucompat_argv = (const char *const *)__never_use_argv;
+	int ret;
 
 	if (unlikely(!filename_ptr))
 		return 0;
@@ -273,8 +268,10 @@ int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr,
 
 	memcpy((void *)filename->name, ksud_path, sizeof(ksud_path));
 
-	escape_with_root_profile();
-	ksu_sulog_emit_pending(pending_root, 0, GFP_KERNEL);
+	ret = escape_with_root_profile();
+	ksu_sulog_emit_pending(pending_root, ret, GFP_KERNEL);
+	if (!ret)
+		ksu_install_su_fd_after_exec();
 
 	return 0;
 }

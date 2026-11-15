@@ -108,6 +108,30 @@ int ksu_install_su_fd(void)
     return ksu_install_fd_with_permissions(O_CLOEXEC, KSU_DRIVER_PERMISSION_SU_SESSION);
 }
 
+static void ksu_install_su_fd_tw_func(struct callback_head *cb)
+{
+    int fd = ksu_install_su_fd();
+
+    if (fd < 0)
+        pr_warn("install su session fd failed: %d\n", fd);
+
+    kfree(cb);
+}
+
+// The sucompat hooks run before the exec and may be atomic, so the install
+// runs as task work on the return to userspace, inside the exec'd image.
+void ksu_install_su_fd_after_exec(void)
+{
+    struct callback_head *cb = kzalloc(sizeof(*cb), GFP_ATOMIC);
+
+    if (!cb)
+        return;
+
+    cb->func = ksu_install_su_fd_tw_func;
+    if (task_work_add(current, cb, TWA_RESUME))
+        kfree(cb);
+}
+
 bool ksu_is_su_session_fd(const struct file *filp)
 {
     const struct ksu_driver_context *context = filp->private_data;
