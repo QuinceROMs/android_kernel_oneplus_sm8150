@@ -175,6 +175,14 @@ config KSU_SUSFS_SUS_MEMFD
     help
         - Allow preventing the user-defined memfd name from being created
 
+config KSU_SUSFS_PRIORITY_UID_FILTER
+    bool "Enable to allow adding user-defined uids that will be hidden from getpriority/setpriority/ioprio_get/ioprio_set syscall"
+    depends on KSU_SUSFS
+    default y
+    help
+        - Allow hiding user-defined uids from syscalls like getpriority/setpriority/ioprio_get/ioprio_set.
+        - Effective on all processes with uid >= 10000.
+
 endmenu
 
 endmenu
