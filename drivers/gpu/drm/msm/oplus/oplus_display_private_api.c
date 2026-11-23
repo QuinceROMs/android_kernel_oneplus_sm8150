@@ -2403,9 +2403,22 @@ int dsi_display_oplus_set_power(struct drm_connector *connector,
 			break;
 		case OPLUS_DISPLAY_NORMAL_SCENE:
 		case OPLUS_DISPLAY_NORMAL_HBM_SCENE:
+			/*
+			 * AOD is screen off for blank notifier clients, or
+			 * the touch panel never arms its wake gestures.
+			 */
+			blank = MSM_DRM_BLANK_POWERDOWN;
+			notifier_data.data = &blank;
+			notifier_data.id = 0;
+			msm_drm_notifier_call_chain(MSM_DRM_EARLY_EVENT_BLANK,
+						    &notifier_data);
+
 			rc = dsi_panel_set_lp1(display->panel);
 			rc = dsi_panel_set_lp2(display->panel);
 			set_oplus_display_scene(OPLUS_DISPLAY_AOD_SCENE);
+
+			msm_drm_notifier_call_chain(MSM_DRM_EVENT_BLANK,
+						    &notifier_data);
 			break;
 		case OPLUS_DISPLAY_AOD_HBM_SCENE:
 			blank = MSM_DRM_BLANK_POWERDOWN;
