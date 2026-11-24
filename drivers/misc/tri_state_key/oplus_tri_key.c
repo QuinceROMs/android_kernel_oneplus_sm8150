@@ -1136,6 +1136,8 @@ static ssize_t proc_hall_data_calib_write(struct file *file, const char __user *
 		TRI_KEY_ERR("g_the_chip null\n");
 		return count;
 	}
+	if (count >= sizeof(temp))
+		return -EINVAL;
 	ret = copy_from_user(temp, buffer, count);
 	if (ret) {
 		TRI_KEY_ERR("%s: read proc input error.\n", __func__);
