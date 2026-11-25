@@ -11,7 +11,7 @@
 #include "klog.h" // IWYU pragma: keep
 #include "throne_tracker.h"
 #include "runtime/ksud_boot.h"
-#ifdef CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER
+#if defined(CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER) || defined(CONFIG_KSU_SUSFS_SUS_PATH)
 #include <linux/susfs.h>
 #endif
 #include "compat/kernel_compat.h" // TWA_RESUME on < 5.7
@@ -49,6 +49,10 @@ static void ksu_track_throne_tw_func(struct callback_head *cb)
 	/* An app's uid changes on reinstall, so re-resolve the filtered uids. */
 	susfs_parse_priority_app_strings();
 #endif // #ifdef CONFIG_KSU_SUSFS_PRIORITY_UID_FILTER
+#ifdef CONFIG_KSU_SUSFS_SUS_PATH
+	/* Likewise for the apps allowed to see the sus paths. */
+	susfs_parse_sus_path_app_strings();
+#endif // #ifdef CONFIG_KSU_SUSFS_SUS_PATH
 }
 
 static void ksu_defer_track_throne(void)
