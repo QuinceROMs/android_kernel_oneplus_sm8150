@@ -986,6 +986,7 @@ static enum hrtimer_restart tri_key_status_timeout(struct hrtimer *timer)
 
 static void tri_key_timeout_work_func(struct work_struct *work)
 {
+	mutex_lock(&g_the_chip->mtx);
 	oplus_get_data(g_the_chip);
 	judge_interference(g_the_chip);
 	if (g_the_chip->interf) {
@@ -997,12 +998,14 @@ static void tri_key_timeout_work_func(struct work_struct *work)
 	else {
 		get_position(g_the_chip);
 		if (g_the_chip->position == last_position)
-			return;
+			goto unlock;
 		reupdata_threshold(g_the_chip);
 		report_key_value(g_the_chip);
 		last_position = g_the_chip->position;
 		time = 1;
 		}
+unlock:
+	mutex_unlock(&g_the_chip->mtx);
 }
 
 
@@ -1144,6 +1147,7 @@ static ssize_t proc_hall_data_calib_write(struct file *file, const char __user *
 		return count;
 	}
 	TRI_KEY_LOG("temp is %s:\n", temp);
+	mutex_lock(&g_the_chip->mtx);
 	if (sscanf(temp, "%d,%d,%d,%d,%d,%d", &data[0], &data[1], &data[2],
 		&data[3], &data[4], &data[5]) == 6) {
 		g_the_chip->dnHall_UpV = data[0];
@@ -1161,6 +1165,7 @@ static ssize_t proc_hall_data_calib_write(struct file *file, const char __user *
 			g_the_chip->dnHall_DnV, g_the_chip->upHall_UpV,
 			g_the_chip->upHall_MdV, g_the_chip->upHall_DnV);
 	report_calibration_location(g_the_chip);
+	mutex_unlock(&g_the_chip->mtx);
 	return count;
 }
 
@@ -1292,6 +1297,7 @@ static void register_tri_key_dev_work(struct work_struct *work)
 		input_free_device(chip->input_dev);
 		goto fail;
 	}
+	mutex_init(&chip->mtx);
 	res = init_trikey_proc(pdev);
 	if (res < 0) {
 		TRI_KEY_ERR("create trikey proc fail\n");
