@@ -39,17 +39,19 @@ static struct notify_data sensor_data = {
 #define IOCTL_AUDIO_SEND_ACK _IOW('S', 0, int)
 #define IOCTL_SENSOR_RECEIVE_ACK _IOR('S', 1, int*)
 
+/* Up to 4 bytes of state text and the NUL that writers may omit. */
+#define STATE_BUF_SIZE 5
+
 static ssize_t audio_write(struct file *file,
 		const char __user *buf, size_t len, loff_t *lof)
 {
 	int ret = 0;
 	int state = 0;
-	char kbuf[4];
+	char kbuf[STATE_BUF_SIZE] = { 0 };
 
 	pr_debug("%s: enter\n", __func__);
 
-	len = len > ARRAY_SIZE(kbuf) ?
-			ARRAY_SIZE(kbuf) : len;
+	len = min(len, sizeof(kbuf) - 1);
 	ret = copy_from_user(kbuf, buf, len);
 	if (ret) {
 		pr_err("%s: can't copy %d size data\n", __func__, ret);
@@ -126,12 +128,11 @@ static ssize_t sensor_write(struct file *file,
 {
 	int ret = 0;
 	int state = 0;
-	char kbuf[4];
+	char kbuf[STATE_BUF_SIZE] = { 0 };
 
 	pr_debug("%s: enter\n", __func__);
 
-	len = len > ARRAY_SIZE(kbuf) ?
-			ARRAY_SIZE(kbuf) : len;
+	len = min(len, sizeof(kbuf) - 1);
 	ret = copy_from_user(kbuf, buf, len);
 	if (ret) {
 		pr_err("%s: can't copy %d size data\n", __func__, ret);
